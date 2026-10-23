@@ -31,6 +31,8 @@ public final class AdminTicketDtos {
             TicketCategory category,
             Priority priority,
             boolean needsManualReview,
+            /** True while the team still owes the author a reply (none sent yet, or the author wrote again). */
+            boolean awaitingReply,
             UUID authorId,
             String authorName,
             UUID bookId,
@@ -49,6 +51,7 @@ public final class AdminTicketDtos {
                     ticket.getCategory(),
                     ticket.getPriority(),
                     ticket.getAiOutcome() == AiOutcome.FALLBACK,
+                    ticket.isAwaitingReply(),
                     ticket.getAuthor().getId(),
                     ticket.getAuthor().getName(),
                     ticket.getBook() == null ? null : ticket.getBook().getId(),
@@ -98,7 +101,8 @@ public final class AdminTicketDtos {
             AuthorInfo author,
             BookResponse book,
             AiInfo ai,
-            List<Message> messages) {
+            List<Message> messages,
+            List<AttachmentInfo> attachments) {
     }
 
     /**
@@ -109,11 +113,18 @@ public final class AdminTicketDtos {
             TicketStatus status,
             TicketCategory category,
             Priority priority,
-            UUID assignedAdminId) {
+            UUID assignedAdminId,
+            /* true removes the assignee; cannot be combined with assignedAdminId */
+            Boolean unassign) {
 
         public boolean isEmpty() {
-            return status == null && category == null && priority == null && assignedAdminId == null;
+            return status == null && category == null && priority == null && assignedAdminId == null
+                    && !Boolean.TRUE.equals(unassign);
         }
+    }
+
+    /** An admin that tickets can be assigned to. */
+    public record AdminInfo(UUID id, String name, String email) {
     }
 
     public record NoteRequest(

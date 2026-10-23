@@ -25,7 +25,7 @@ The sample data has no passwords, so demo passwords are chosen at seed time from
 | Frontend | React 19 + Vite + TypeScript, React Router | Small, fast, typed. Plain hooks and a typed API client; no state library is needed for this scope (TDD section 10). |
 | Backend | Java 17, Spring Boot 4, Spring Data JPA (Hibernate) | Strong layering (controller, service, repository), built-in validation, mature security primitives. |
 | Database | PostgreSQL | Relational integrity for authors, books, tickets and messages; `NUMERIC` for money. |
-| Auth | BCrypt password hashes, signed JWT (HS256), checked in one filter | Stateless, simple, server-side role checks. |
+| Auth | BCrypt password hashes; a signed session token in an HttpOnly cookie, CSRF token on writes, sign-in throttling; all checked in one filter | The token is invisible to page scripts, expires when idle, can be revoked at sign-out, and cross-site requests cannot ride on it. |
 | Real-time | Short polling (5 s on a ticket, 10 s on lists) | Meets "near real-time" without WebSocket infrastructure (TDD section 9). |
 | AI | Any OpenAI-compatible chat API (Gemini planned) | Provider, model and URL are configuration, not code. See [AI integration](#ai-integration). |
 
@@ -34,7 +34,7 @@ The sample data has no passwords, so demo passwords are chosen at seed time from
 ```
 Browser (React)  ──HTTPS/JSON──▶  Spring Boot API  ──JDBC──▶  PostgreSQL
                                       │
-                                      ├─ RequestIdFilter → AuthFilter (JWT + role rules)
+                                      ├─ RequestIdFilter → AuthFilter (session cookie + CSRF + role rules)
                                       ├─ Controllers → Services → Repositories
                                       ├─ GlobalExceptionHandler (one error shape)
                                       └─ AI layer ──HTTPS──▶ LLM provider (server-side only)
@@ -42,11 +42,15 @@ Browser (React)  ──HTTPS/JSON──▶  Spring Boot API  ──JDBC──▶
 
 - **Layers:** `web` (controllers, error handling) → `service` → `repository` / `domain`; `ai` is a separate package; `security` holds the filters; `config` holds typed configuration.
 - **Access control is enforced on the server.** `AuthFilter` is the single place that decides who may call what: `/api/v1/author/**` is authors only, `/api/v1/admin/**` is admins only. Services also scope every query to the caller (an author's ticket lookup includes the author id), so another author's ticket is simply "not found" (404). The client route guards are only a convenience.
+- **Sessions.** Signing in sets an HttpOnly, `Path=/api` cookie holding a signed token (`Secure` and `SameSite` from configuration). The token is never in a response body or in browser storage. It expires after `TOKEN_TTL_MINUTES` of inactivity and is renewed (same session, same CSRF token) while the person keeps working, but never lives past `app.auth.session-max-minutes` (12 hours) from sign-in. Signing out revokes the session on the server, so a copied cookie stops working. Revocations and the sign-in throttle are held in memory: they reset on restart and are per instance, which is right for one instance and needs a shared store if the API is scaled out.
+- **CSRF.** Reading is safe; every write (POST/PATCH/PUT/DELETE) must carry the session's CSRF token in an `X-CSRF-Token` header, which the app learns from `POST /auth/login` or `GET /auth/session` and keeps in memory only. If the request has an `Origin` header it must equal `CLIENT_ORIGIN`. Both failures give `403 CSRF_INVALID`.
+- **Sign-in throttling.** 5 failed attempts for the same email from the same address lock that pair for 15 minutes (`429 TOO_MANY_ATTEMPTS` with `Retry-After`), and 50 failures from one address lock the address. Unknown emails are counted exactly like real ones and cost the same time, so neither the lock nor the timing shows which accounts exist. Limits are in `application.properties`.
 - **Persist before AI.** A ticket is saved first. Triage then runs in the background after the transaction commits, so an AI outage can never block or roll back ticket creation.
 - **Public replies and internal notes** are one `TicketMessage` table with a `visibility` flag. Every author query filters on `PUBLIC`, and the author DTOs have no field that could carry an internal note.
 - **AI suggestion vs final value:** `aiCategory`/`aiPriority` keep what the model said; `category`/`priority` are the working values an admin can override.
 - **Versioned migrations.** The schema is created by Flyway (`backend/src/main/resources/db/migration`, applied automatically at startup) and Hibernate only *validates* it (`JPA_DDL_AUTO=validate`), so entities and schema cannot drift apart silently. An existing database without migration history is adopted as version 1.
 - **Admin choices are never overwritten by a late AI answer.** If an admin sets the category or priority while triage is still running, the AI result is stored only as the suggestion.
+- **Attachments.** An author can attach up to 5 files (JPEG, PNG, WebP or PDF, 5 MB each; all configurable) to their own open ticket, in the new-ticket form or later on the ticket page. The type is decided from the file's first bytes, never from its name or the browser's Content-Type, and the stored name is cleaned of paths and odd characters with an extension that matches the detected type. Files live in PostgreSQL (`bytea`) next to their metadata, are listed without reading their content, and are served only to the ticket's author and to admins, always as `Content-Disposition: attachment` with `nosniff` and a sandboxing CSP. Adding a file does not by itself reopen a ticket or flag it as awaiting reply; the author's message does.
 - **No hardcoded configuration.** See [Configuration](#configuration).
 - **The client holds no copies of server rules.** It reads `GET /api/v1/config` at startup: limits, poll intervals, policy figures, locale/currency, category/priority/status labels and the allowed status transitions.
 
@@ -60,6 +64,8 @@ Browser (React)  ──HTTPS/JSON──▶  Spring Boot API  ──JDBC──▶
 | Closed | Open |
 
 Moving to Resolved or Closed sets `resolvedAt`; reopening clears it. A reply never changes the status unless the admin picks one.
+
+**Author follow-ups.** An author can reply on their own ticket until it is Closed (`409 TICKET_CLOSED`: they raise a new ticket). A reply on a Resolved ticket reopens it. The admin queue marks a ticket **awaiting reply** while it is unresolved and either has no team reply yet or the author wrote after the latest one; `awaiting=true` filters on that.
 
 ## Getting started locally
 
@@ -132,8 +138,10 @@ Environment-specific values and secrets are never in source code. They come from
 | `DB_PASSWORD` | yes | App user's password |
 | `JPA_DDL_AUTO` | | `update` for development, `validate` once migrations are used |
 | `AUTH_SECRET` | yes | Token signing key, at least 32 characters |
-| `TOKEN_TTL_MINUTES` | | Token lifetime |
-| `CLIENT_ORIGIN` | | Exact frontend origin allowed by CORS |
+| `TOKEN_TTL_MINUTES` | | Minutes of inactivity before a session ends (it renews while in use) |
+| `COOKIE_SECURE` | | `true` on HTTPS (production); `false` only for local HTTP |
+| `COOKIE_SAMESITE` | | `Lax` (default choice), `Strict`, or `None` (needs `COOKIE_SECURE=true`) |
+| `CLIENT_ORIGIN` | | Exact frontend origin allowed by CORS and accepted in the `Origin` check |
 | `LLM_API_KEY` | yes | Provider key. Optional: leave unset to run without AI |
 | `LLM_PROVIDER_NAME`, `LLM_MODEL`, `LLM_BASE_URL` | | Provider label (for logs), model id, OpenAI-compatible base URL |
 | `LLM_REASONING_EFFORT` | | Optional. Needed for "thinking" models (Gemini 3.x): `none`, `minimal` or `low`. Leave unset for models that do not support it |
@@ -142,6 +150,10 @@ Environment-specific values and secrets are never in source code. They come from
 | `SEED_AUTHOR_PASSWORD`, `SEED_ADMIN_PASSWORD` | yes | Demo passwords, only needed when seeding |
 | `DEV_API_PROXY_TARGET` (client) | | Dev server proxy target for `/api` |
 | `VITE_API_BASE_URL` (client) | | Public API address for a deployed build. Never put secrets in `VITE_` variables |
+
+Other tunables live in `application.properties`: the absolute session limit and throttle limits (`app.auth.*`), and attachment limits and allowed types (`app.attachments.*`, with the matching multipart size limits).
+
+**Cookie sessions need a same-site deployment.** The app and the API must be served from the same site (for example the host proxies `/api` to the API, or one service serves both), otherwise browsers treat the cookie as third-party and may drop it. Locally the Vite dev server does this with its proxy.
 
 The API key is never sent to the browser. `.env` files are git-ignored; only `.env.example` files are committed.
 
@@ -183,7 +195,7 @@ The API key is never sent to the browser. `.env` files are git-ignored; only `.e
 
 ## API reference
 
-Base path `/api/v1`. JSON in and out. Protected routes need `Authorization: Bearer <token>`. Every response carries an `X-Request-Id` header.
+Base path `/api/v1`. JSON in and out (file upload is `multipart/form-data`). Protected routes need the session cookie; writes also need the `X-CSRF-Token` header. Every response carries an `X-Request-Id` header.
 
 **Error shape** (never a stack trace):
 
@@ -197,9 +209,13 @@ Base path `/api/v1`. JSON in and out. Protected routes need `Authorization: Bear
 |---|---|
 | 400 | `VALIDATION_ERROR` (field-level `details`), `INVALID_REQUEST_BODY` |
 | 401 | `UNAUTHENTICATED`, `INVALID_CREDENTIALS` |
-| 403 | `FORBIDDEN` (wrong role) |
-| 404 | `TICKET_NOT_FOUND`, `NOT_FOUND` (also used for another author's ticket) |
+| 403 | `FORBIDDEN` (wrong role), `CSRF_INVALID` |
+| 404 | `TICKET_NOT_FOUND`, `ATTACHMENT_NOT_FOUND`, `NOT_FOUND` (also used for another author's ticket) |
 | 405 | `METHOD_NOT_ALLOWED` |
+| 409 | `TICKET_CLOSED`, `ATTACHMENT_LIMIT` |
+| 413 | `FILE_TOO_LARGE` |
+| 415 | `UNSUPPORTED_FILE_TYPE` |
+| 429 | `TOO_MANY_ATTEMPTS` (with `Retry-After` seconds) |
 | 503 | `AI_UNAVAILABLE` |
 | 500 | `INTERNAL_ERROR` (safe message plus request id) |
 
@@ -209,14 +225,15 @@ Base path `/api/v1`. JSON in and out. Protected routes need `Authorization: Bear
 |---|---|
 | `GET /health` | Liveness and database check. Returns only `{"status":"UP"}` (503 `DOWN`). No details. |
 | `GET /config` | Client settings: brand, locale, currency, poll intervals, page size, limits, policy figures, option labels, status transitions. No secrets. |
-| `POST /auth/login` | Body `{email, password}` → `{token, user}`. Same message for unknown email and wrong password. |
+| `POST /auth/login` | Body `{email, password}` → `{user, csrfToken}` and the session cookie. Same message for unknown email and wrong password; throttled (see above). |
+| `GET /auth/session` | Always `200`: `{user, csrfToken}` for a valid session, nulls otherwise. The app calls it at startup. |
+| `POST /auth/logout` | `204`. Revokes the session if there is one and deletes the cookie. Works even when the session has expired. |
 
 ### Any signed-in user
 
 | Method and path | Purpose |
 |---|---|
 | `GET /auth/me` | Current user (`id`, `name`, `email`, `role`). |
-| `POST /auth/logout` | `204`. Tokens are stateless; the client discards its token. |
 
 ### Author (role AUTHOR; only the caller's own data)
 
@@ -225,16 +242,21 @@ Base path `/api/v1`. JSON in and out. Protected routes need `Authorization: Bear
 | `GET /author/books` | The author's books: title, ISBN, genre, publication date, status, MRP, copies sold, royalty earned/paid/pending, last payout, print partner, platforms. Null for fields that do not exist yet (books in production); zero is a real value. |
 | `GET /author/tickets?page&size` | The author's tickets, newest first, `{data, pagination}`. Page size is capped. |
 | `POST /author/tickets` | Body `{bookId?, subject, description}` → `201` with the ticket. `bookId` null means General / Account Level; a book that is not the author's gives `400` on `bookId`. Subject 3–160 characters, description 10–10,000. |
-| `GET /author/tickets/{ticketId}` | One own ticket with **public** replies only. No AI, priority, category or assignee fields. |
+| `GET /author/tickets/{ticketId}` | One own ticket with **public** replies and its attachments. No AI, priority, category or assignee fields. |
+| `POST /author/tickets/{ticketId}/replies` | Body `{body}` → `201` with the ticket. Reopens a Resolved ticket; `409` on a Closed one. |
+| `POST /author/tickets/{ticketId}/attachments` | `multipart/form-data`, one part named `file` → `201` with `{id, fileName, contentType, sizeBytes, createdAt}`. `415` if the content is not an allowed type (whatever the name says), `413` over the size limit, `409` over the per-ticket limit or on a Closed ticket. |
+| `GET /author/tickets/{ticketId}/attachments/{attachmentId}` | The file, as a download. Another author's file is `404`. |
 
 ### Admin (role ADMIN)
 
 | Method and path | Purpose |
 |---|---|
-| `GET /admin/tickets` | Queue. Filters: `status`, `category`, `priority`, `from`, `to` (dates, `yyyy-MM-dd`, UTC, `to` inclusive); `page`, `size`. Order: unresolved first, then priority Critical→Low, then oldest first. Rows include author, book, assignee, age in hours and a manual-review flag. |
+| `GET /admin/tickets` | Queue. Filters: `status`, `category`, `priority`, `from`, `to` (dates, `yyyy-MM-dd`, UTC, `to` inclusive), `search` (subject, description, author name or email, book title; max 100 characters), `assignedTo` (an admin id, or `unassigned`), `awaiting=true` (waiting for a team reply); `page`, `size`. Order: unresolved first, then priority Critical→Low, then oldest first. Rows include author, book, assignee, age in hours and a manual-review flag. |
+| `GET /admin/admins` | The admins a ticket can be assigned to. |
 | `GET /admin/tickets/summary` | Counts by status, unresolved counts by priority, unassigned unresolved count. |
 | `GET /admin/tickets/{ticketId}` | Ticket, author, full book record, AI info (outcome, suggestion, reason), when the last reply was sent, public replies and internal notes. |
-| `PATCH /admin/tickets/{ticketId}` | Change `status`, `category`, `priority`, `assignedAdminId` (only the fields sent). Status moves follow the table above; the assignee must be an admin. AI suggestions are left untouched. |
+| `GET /admin/tickets/{ticketId}/attachments/{attachmentId}` | The file, as a download. |
+| `PATCH /admin/tickets/{ticketId}` | Change `status`, `category`, `priority`, `assignedAdminId`, or `unassign: true` (only the fields sent). Status moves follow the table above; the assignee must be an admin. AI suggestions are left untouched. |
 | `POST /admin/tickets/{ticketId}/notes` | Body `{body}` → `201`. Internal note, never visible to authors. |
 | `POST /admin/tickets/{ticketId}/ai-draft` | Returns `{draft}` for the admin to edit. Nothing is saved or sent. `503 AI_UNAVAILABLE` if the AI cannot help. |
 | `POST /admin/tickets/{ticketId}/replies` | Body `{body, status?}` → `201`. Public reply; the status changes only if `status` is sent. |
@@ -245,7 +267,7 @@ Base path `/api/v1`. JSON in and out. Protected routes need `Authorization: Bear
 backend/
   src/main/java/com/bookleaf/support/
     web/ (controllers, error handling)   service/   repository/   domain/   dto/
-    security/ (JWT, filters)   ai/ (prompts, client, parser, fallback, triage, draft)
+    security/ (sessions, cookie, CSRF, throttle, filters)   ai/ (prompts, client, parser, fallback, triage, draft)
     config/ (typed properties, CORS, async)   seed/ (idempotent importer)
   src/main/resources/  application.properties   ai/ (prompts, knowledge base, rules)   seed/ (dataset)
   src/test/java/       unit tests
@@ -258,10 +280,10 @@ docs/WRITEUP.md        one-page write-up
 ## Known limitations and next steps
 
 - **Not yet done:** live deployment and URL; production `.env`. The AI was exercised live on the brief's sample queries (see above), but classification accuracy has only been measured on 5 live samples and draft quality reviewed by reading about 13 drafts; a larger labelled set is the next step.
-- **Auth:** the token is kept in `sessionStorage` (it ends with the tab) and is valid until it expires; there is no revocation, refresh or login rate limiting. Production should use HttpOnly cookies with CSRF protection, token rotation and rate limiting (TDD sections 5 and 17).
+- **Sessions:** revocations and the sign-in throttle are in memory (they reset on restart and are not shared between instances); a multi-instance deployment needs a shared store such as Redis or a database table. The client address used for throttling is the connection's address, so behind a proxy the proxy's forwarded-address handling must be configured. There is no refresh-token rotation, MFA, or password reset flow.
 - **Real time:** polling, not SSE/WebSockets.
-- **Tickets:** authors cannot reply to a ticket after the first message, so reopen-on-reply does not exist (TDD section 8 allows documenting this). An admin cannot unassign a ticket. Resolved and closed tickets sort oldest-first like the rest.
-- **Attachments:** UI placeholder only, as the brief allows.
+- **Tickets:** there is no assignment history or audit log of admin actions. Resolved and closed tickets sort oldest-first like the rest.
+- **Attachments:** stored in PostgreSQL, which is simple and keeps backups complete but will not suit large volumes; object storage with signed URLs is the next step. There is no malware scan, image re-encoding or preview; files are only offered for download. Admins cannot upload, and removing an attachment is not supported.
 - **API docs:** this README section is the documentation; there is no generated OpenAPI file.
 - **Tests:** the backend has unit and API integration tests (on an in-memory H2 database, so SQL that is specific to PostgreSQL is covered by the smoke script and startup validation, not by the unit suite) and the client has unit tests. There are no automated browser tests; running the same suite against PostgreSQL (for example with Testcontainers) would be the next step.
 - **AI quality:** add a labelled evaluation set for category accuracy, track the rate at which admins edit drafts, and move to retrieval only when the knowledge base grows beyond what fits in a prompt.
@@ -271,4 +293,5 @@ docs/WRITEUP.md        one-page write-up
 - **Backend is Spring Boot, not Express/Prisma** (a project decision); the layering and API follow the TDD.
 - **Extra endpoints:** `GET /config` (so the client has no hardcoded rules) and `GET /admin/tickets/summary` (PRD P1 summary counts).
 - **Gemini** is the intended AI provider rather than the TDD's example gpt-4o-mini, through the same OpenAI-compatible client.
-- **Token storage** in `sessionStorage` instead of cookies (see limitations).
+- **Extras beyond the documents:** author follow-up replies with reopen-on-reply, queue search, unassign, an "awaiting reply" filter, and real file attachments (the brief allowed a placeholder).
+- **Cookie sessions require a same-site deployment** (see Configuration); the TDD's token-in-header option was not used.

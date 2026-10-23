@@ -1,7 +1,8 @@
 import { useCallback } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { EmptyState, ErrorMessage, PriorityChip, Spinner, StatusChip } from '../../components/feedback.tsx'
-import { api } from '../../lib/api.ts'
+import { AttachmentList } from '../../components/AttachmentList.tsx'
+import { api, attachmentUrl } from '../../lib/api.ts'
 import { formatAge, labelFor } from '../../lib/format.ts'
 import { useResource } from '../../lib/useResource.ts'
 import type { AdminTicketDetail } from '../../types/api.ts'
@@ -90,6 +91,7 @@ export function AdminTicketPage() {
       <p className="muted">
         Raised {dateTime(summary.createdAt)} · waiting {formatAge(summary.ageHours)} ·{' '}
         {detail.repliedAt ? `last reply sent ${dateTime(detail.repliedAt)}` : 'no reply sent yet'}
+        {summary.awaitingReply && <span className="chip chip-awaiting">Awaiting reply</span>}
       </p>
 
       <div className="admin-layout">
@@ -97,6 +99,10 @@ export function AdminTicketPage() {
           <section className="card" aria-labelledby="query-heading">
             <h2 id="query-heading">Author’s query</h2>
             <p className="prewrap">{detail.description}</p>
+            <AttachmentList
+              attachments={detail.attachments}
+              hrefFor={(file) => attachmentUrl('admin', detail.summary.id, file.id)}
+            />
           </section>
 
           <section aria-labelledby="conversation-heading">
@@ -112,8 +118,12 @@ export function AdminTicketPage() {
                   >
                     <p className="message-meta">
                       <strong>{message.senderName}</strong> · {dateTime(message.createdAt)}{' '}
-                      <span className={`chip ${message.visibility === 'INTERNAL' ? 'chip-internal' : 'chip-public'}`}>
-                        {message.visibility === 'INTERNAL' ? 'Internal note (not visible to author)' : 'Reply sent to author'}
+                      <span className={`chip ${message.visibility === 'INTERNAL' ? 'chip-internal' : message.senderRole === 'AUTHOR' ? 'chip-awaiting' : 'chip-public'}`}>
+                        {message.visibility === 'INTERNAL'
+                          ? 'Internal note (not visible to author)'
+                          : message.senderRole === 'AUTHOR'
+                            ? 'Message from the author'
+                            : 'Reply sent to author'}
                       </span>
                     </p>
                     <p className="prewrap">{message.body}</p>

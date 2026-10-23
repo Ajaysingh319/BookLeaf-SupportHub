@@ -2,6 +2,7 @@ package com.bookleaf.support.ai;
 
 import com.bookleaf.support.ai.PromptTicket.BookFacts;
 import com.bookleaf.support.config.AppProperties;
+import com.bookleaf.support.domain.Role;
 import com.bookleaf.support.domain.TicketCategory;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
@@ -106,14 +107,20 @@ public class PromptTemplates {
         text.append("Ticket description: ").append(limit(ticket.description(), draft.descriptionLimit())).append('\n');
         text.append('\n');
         text.append(bookSection(ticket.book()));
-        List<String> replies = ticket.recentPublicReplies();
-        if (replies != null && !replies.isEmpty()) {
-            text.append("\nEarlier replies already sent to the author (oldest first, trimmed):\n");
-            for (String reply : replies) {
-                text.append("- ").append(limit(reply, draft.replyLimit())).append('\n');
+        List<PromptTicket.Turn> conversation = ticket.recentMessages();
+        boolean authorSpokeLast = false;
+        if (conversation != null && !conversation.isEmpty()) {
+            text.append("\nRecent messages on this ticket after the original query (oldest first, trimmed):\n");
+            for (PromptTicket.Turn turn : conversation) {
+                text.append("- ").append(turn.role() == Role.AUTHOR ? "Author: " : "Support: ")
+                        .append(limit(turn.text(), draft.replyLimit())).append('\n');
             }
+            authorSpokeLast = conversation.get(conversation.size() - 1).role() == Role.AUTHOR;
         }
-        text.append("\nWrite the reply the support representative will review and send.");
+        text.append(authorSpokeLast
+                ? "\nThe author has written again. Write the reply to their latest message that the support "
+                        + "representative will review and send."
+                : "\nWrite the reply the support representative will review and send.");
         return text.toString();
     }
 

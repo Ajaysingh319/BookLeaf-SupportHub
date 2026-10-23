@@ -2,6 +2,7 @@ package com.bookleaf.support.ai;
 
 import com.bookleaf.support.domain.Book;
 import com.bookleaf.support.domain.Priority;
+import com.bookleaf.support.domain.Role;
 import com.bookleaf.support.domain.TicketCategory;
 
 import java.math.BigDecimal;
@@ -19,7 +20,11 @@ public record PromptTicket(
         BookFacts book,
         TicketCategory category,
         Priority priority,
-        List<String> recentPublicReplies) {
+        List<Turn> recentMessages) {
+
+    /** One public message on the ticket: who wrote it and what they said. Internal notes are never included. */
+    public record Turn(Role role, String text) {
+    }
 
     /** Verified book record values. Null fields are passed on as "not available", never guessed. */
     public record BookFacts(

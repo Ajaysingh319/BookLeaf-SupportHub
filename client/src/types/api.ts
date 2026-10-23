@@ -10,8 +10,14 @@ export interface UserSummary {
 }
 
 export interface LoginResponse {
-  token: string
   user: UserSummary
+  csrfToken: string
+}
+
+/** The current session; both are null when nobody is signed in. */
+export interface SessionResponse {
+  user: UserSummary | null
+  csrfToken: string | null
 }
 
 /** Null amounts/dates mean "not available yet" (a book still in production); zero is a real value. */
@@ -53,6 +59,15 @@ export interface TicketMessage {
   createdAt: string
 }
 
+/** A file on a ticket; the bytes come from the download link, never from the ticket itself. */
+export interface Attachment {
+  id: string
+  fileName: string
+  contentType: string
+  sizeBytes: number
+  createdAt: string
+}
+
 export interface TicketDetail {
   id: string
   subject: string
@@ -63,6 +78,7 @@ export interface TicketDetail {
   createdAt: string
   updatedAt: string
   messages: TicketMessage[]
+  attachments: Attachment[]
 }
 
 export interface Page<T> {
@@ -113,6 +129,7 @@ export interface ClientConfig {
     /** Longest reply or internal note. */
     messageMax: number
   }
+  attachments: { maxFileBytes: number; maxFilesPerTicket: number; allowedTypes: string[] }
   options: { statuses: StatusOption[]; categories: Option[]; priorities: Option[] }
 }
 
@@ -129,6 +146,8 @@ export interface AdminTicketSummary {
   category: string
   priority: string
   needsManualReview: boolean
+  /** True while the team still owes the author a reply (none sent yet, or the author wrote again). */
+  awaitingReply: boolean
   authorId: string
   authorName: string
   bookId: string | null
@@ -164,6 +183,7 @@ export interface AdminTicketDetail {
     reason: string | null
   }
   messages: AdminMessage[]
+  attachments: Attachment[]
 }
 
 /** Only the fields that are present are changed. */
@@ -172,6 +192,15 @@ export interface AdminTicketPatch {
   category?: string
   priority?: string
   assignedAdminId?: string
+  /** true removes the assignee; cannot be sent together with assignedAdminId. */
+  unassign?: boolean
+}
+
+/** An admin that tickets can be assigned to. */
+export interface AdminInfo {
+  id: string
+  name: string
+  email: string
 }
 
 export interface QueueStats {
@@ -186,6 +215,12 @@ export interface QueueFilters {
   priority?: string
   from?: string
   to?: string
+  /** Free-text search over subject, author name or email, and book title. */
+  q?: string
+  /** An admin id, or "unassigned". */
+  assignedTo?: string
+  /** "true" keeps only tickets that are waiting for a reply from the team. */
+  awaiting?: string
 }
 
 /** The common error shape: { error: { code, message, details? }, requestId }. */

@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { api, setUnauthorizedHandler, tokenStore } from '../../lib/api.ts'
+import { api, setCsrfToken, setUnauthorizedHandler } from '../../lib/api.ts'
 import type { UserSummary } from '../../types/api.ts'
 import { AuthContext, type AuthState } from './authContext.ts'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserSummary | null>(null)
-  const [status, setStatus] = useState<AuthState['status']>(() => (tokenStore.get() ? 'checking' : 'ready'))
+  const [status, setStatus] = useState<AuthState['status']>('checking')
   const [sessionExpired, setSessionExpired] = useState(false)
 
-  // If the server rejects the saved token at any point, sign the user out and say why.
+  // If the server rejects the session at any point, sign the user out and say why.
   useEffect(() => {
     setUnauthorizedHandler(() => {
       setUser(null)
@@ -17,16 +17,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => setUnauthorizedHandler(null)
   }, [])
 
-  // On first load, check a saved session with the server; the token alone is never trusted.
+  // On first load, ask the server who is signed in: the session cookie is invisible to scripts.
   useEffect(() => {
-    if (!tokenStore.get()) return
     const controller = new AbortController()
     api
-      .me(controller.signal)
-      .then(setUser)
+      .session(controller.signal)
+      .then((session) => {
+        setCsrfToken(session.csrfToken)
+        setUser(session.user)
+      })
       .catch(() => {
-        // An expired or invalid token is already cleared by the API client on a 401. Any other
-        // failure (server down, request aborted when the effect re-runs) must not discard a good token.
+        // Server down or request aborted when the effect re-runs: show the login page, nothing to discard.
       })
       .finally(() => {
         if (!controller.signal.aborted) setStatus('ready')
@@ -36,7 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const result = await api.login(email.trim(), password)
-    tokenStore.set(result.token)
+    setCsrfToken(result.csrfToken)
     setSessionExpired(false)
     setUser(result.user)
     return result.user
@@ -46,9 +47,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api.logout()
     } catch {
-      /* the token is discarded either way */
+      /* the session is forgotten here either way */
     }
-    tokenStore.clear()
+    setCsrfToken(null)
     setSessionExpired(false)
     setUser(null)
   }, [])

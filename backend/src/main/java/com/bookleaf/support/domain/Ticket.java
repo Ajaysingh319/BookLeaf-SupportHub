@@ -90,6 +90,9 @@ public class Ticket {
     /** When the latest public reply was sent to the author (audit metadata, PRD P1). */
     private Instant repliedAt;
 
+    /** When the author last added a follow-up message (null if they never did). */
+    private Instant lastAuthorMessageAt;
+
     /** True once an admin has chosen the category or priority; a late AI result must not replace that choice. */
     @Column(nullable = false)
     private boolean triageOverridden;
@@ -157,6 +160,32 @@ public class Ticket {
 
     public boolean isTriageOverridden() { return triageOverridden; }
     public void markTriageOverridden() { this.triageOverridden = true; }
+
+    public Instant getLastAuthorMessageAt() { return lastAuthorMessageAt; }
+
+    /**
+     * The author wrote a follow-up. A resolved ticket reopens (TDD section 8); a closed one cannot be
+     * written on, which the service checks first.
+     */
+    public void markAuthorMessage() {
+        lastAuthorMessageAt = Instant.now();
+        updatedAt = lastAuthorMessageAt;
+        if (status == TicketStatus.RESOLVED) {
+            status = TicketStatus.OPEN;
+            resolvedAt = null;
+        }
+    }
+
+    /**
+     * True while the team still owes the author a reply: the ticket is unresolved and either no reply has
+     * been sent yet, or the author wrote again after the latest reply.
+     */
+    public boolean isAwaitingReply() {
+        if (!TicketStatusRules.isUnresolved(status)) {
+            return false;
+        }
+        return repliedAt == null || (lastAuthorMessageAt != null && lastAuthorMessageAt.isAfter(repliedAt));
+    }
 
     public Instant getRepliedAt() { return repliedAt; }
 

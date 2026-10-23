@@ -36,6 +36,19 @@ export function createFormatters(settings: { locale: string; currencyCode: strin
 }
 
 /** Parses a date-only string (2024-01-10) as a local date, so it never shifts by a time zone. */
+/** 1536 -> "1.5 KB". Sizes are shown for people, so binary units are rounded to one decimal at most. */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB']
+  let value = bytes / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${Number.isInteger(value) ? value : value.toFixed(1)} ${units[unit]}`
+}
+
 export function parseDateOnly(value: string): Date {
   const [year = 0, month = 1, day = 1] = value.split('-').map(Number)
   return new Date(year, month - 1, day)

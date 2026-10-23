@@ -57,19 +57,37 @@ $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", ".\mvnw.cmd -q spr
     -RedirectStandardOutput $log -RedirectStandardError "$log.err" -PassThru -WindowStyle Hidden
 
 $script:fail = 0
+$script:cookieName = "bookleaf_session"
 
-function Call($method, $path, $token, $body) {
+# $token is a session (@{ cookie; csrf } from Login) or a raw string used as a cookie value; $null sends no cookie.
+# Unsafe methods carry the session's CSRF token, as the browser app does.
+function Call($method, $path, $token, $body, $extraHeaders) {
     $headers = @{}
-    if ($token) { $headers["Authorization"] = "Bearer $token" }
+    # Windows PowerShell drops a hand-written Cookie header, so the cookie goes in through a web session.
+    $cookie = $null
+    if ($token -is [hashtable]) {
+        $cookie = $token.cookie
+        if ($method -ne "GET" -and $token.csrf) { $headers["X-CSRF-Token"] = $token.csrf }
+    } elseif ($token) {
+        $cookie = "$($script:cookieName)=$token"
+    }
+    if ($extraHeaders) { foreach ($k in $extraHeaders.Keys) { $headers[$k] = $extraHeaders[$k] } }
     $params = @{ Uri = "$base$path"; Method = $method; Headers = $headers; UseBasicParsing = $true }
+    if ($cookie) {
+        $name, $value = $cookie -split '=', 2
+        $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+        $session.Cookies.Add([Uri]$base, (New-Object System.Net.Cookie($name, $value, "/", ([Uri]$base).Host)))
+        $params["WebSession"] = $session
+    }
     if ($null -ne $body) { $params["Body"] = ($body | ConvertTo-Json -Depth 5); $params["ContentType"] = "application/json" }
     try {
         $r = Invoke-WebRequest @params
-        $status = [int]$r.StatusCode; $text = $r.Content
+        $status = [int]$r.StatusCode; $text = $r.Content; $setCookie = $r.Headers["Set-Cookie"]
     } catch {
         $resp = $_.Exception.Response
         if (-not $resp) { throw }
         $status = [int]$resp.StatusCode
+        $setCookie = $resp.Headers["Set-Cookie"]
         $text = $_.ErrorDetails.Message
         if (-not $text) {
             $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
@@ -78,7 +96,15 @@ function Call($method, $path, $token, $body) {
     }
     $json = $null
     if ($text) { try { $json = $text | ConvertFrom-Json } catch { } }
-    return @{ status = $status; json = $json; text = $text }
+    return @{ status = $status; json = $json; text = $text; setCookie = "$setCookie" }
+}
+
+# Signs in and returns the session ($null if refused); the cookie's name is learned from the response.
+function Login($email, $password) {
+    $r = Call POST "/api/v1/auth/login" $null @{ email = $email; password = $password }
+    if ($r.status -ne 200 -or $r.setCookie -notmatch '^([^=;]+)=([^;]+)') { return $null }
+    $script:cookieName = $Matches[1]
+    return @{ cookie = "$($Matches[1])=$($Matches[2])"; csrf = $r.json.csrfToken; user = $r.json.user; raw = $r }
 }
 
 function Check($name, $ok) {
@@ -118,9 +144,9 @@ try {
 
     # ---- authentication ----
     $r = Call GET "/api/v1/author/books" $null $null
-    Check "no token -> 401 UNAUTHENTICATED" ($r.status -eq 401 -and $r.json.error.code -eq "UNAUTHENTICATED" -and $r.json.requestId)
+    Check "no session -> 401 UNAUTHENTICATED" ($r.status -eq 401 -and $r.json.error.code -eq "UNAUTHENTICATED" -and $r.json.requestId)
     $r = Call GET "/api/v1/author/books" "not-a-real-token" $null
-    Check "garbage token -> 401" ($r.status -eq 401)
+    Check "garbage cookie -> 401" ($r.status -eq 401)
     $r = Call POST "/api/v1/auth/login" $null @{ email = $authorAEmail; password = "$authorPw-wrong" }
     Check "wrong password -> 401 INVALID_CREDENTIALS" ($r.status -eq 401 -and $r.json.error.code -eq "INVALID_CREDENTIALS")
     $r = Call POST "/api/v1/auth/login" $null @{ email = "nobody.$authorAEmail"; password = "whatever" }
@@ -128,14 +154,23 @@ try {
     $r = Call POST "/api/v1/auth/login" $null @{ email = ""; password = "" }
     Check "empty login -> 400 with field details" ($r.status -eq 400 -and $r.json.error.details.Count -ge 2)
 
-    $r = Call POST "/api/v1/auth/login" $null @{ email = $authorAEmail.ToUpper(); password = $authorPw }
-    $tokenA = $r.json.token
-    Check "author login (email case-insensitive) -> 200 + token, no password hash" ($r.status -eq 200 -and $tokenA -and -not ($r.json.user.PSObject.Properties.Name -contains "passwordHash"))
-    $r = Call POST "/api/v1/auth/login" $null @{ email = $authorBEmail; password = $authorPw }
-    $tokenB = $r.json.token
-    $r = Call POST "/api/v1/auth/login" $null @{ email = $adminEmail; password = $adminPw }
-    $admin = $r.json.token; $adminId = $r.json.user.id
-    Check "admin login -> ADMIN" ($r.status -eq 200 -and $r.json.user.role -eq "ADMIN")
+    $tokenA = Login ($authorAEmail.ToUpper()) $authorPw
+    $r = $tokenA.raw
+    Check "author login (email case-insensitive) -> 200, HttpOnly SameSite cookie, csrf token, no JWT in body, no password hash" ($r.status -eq 200 -and $tokenA.csrf -and $r.setCookie -match "HttpOnly" -and $r.setCookie -match "SameSite=" -and $r.setCookie -match "Path=/api" -and $r.text -notmatch "eyJ" -and -not ($r.json.user.PSObject.Properties.Name -contains "passwordHash"))
+    $tokenB = Login $authorBEmail $authorPw
+    $admin = Login $adminEmail $adminPw
+    $adminId = $admin.user.id
+    Check "admin login -> ADMIN" ($admin -and $admin.user.role -eq "ADMIN")
+    $r = Call GET "/api/v1/auth/session" $tokenA $null
+    Check "GET /auth/session -> user and the same csrf token" ($r.status -eq 200 -and $r.json.user.role -eq "AUTHOR" -and $r.json.csrfToken -eq $tokenA.csrf)
+    $r = Call GET "/api/v1/auth/session" $null $null
+    Check "GET /auth/session without a session -> 200 with nulls" ($r.status -eq 200 -and $null -eq $r.json.user)
+    $r = Call POST "/api/v1/author/tickets" @{ cookie = $tokenA.cookie; csrf = $null } @{ subject = "$p csrf"; description = "A description long enough." }
+    Check "write without the csrf token -> 403 CSRF_INVALID" ($r.status -eq 403 -and $r.json.error.code -eq "CSRF_INVALID")
+    $r = Call POST "/api/v1/author/tickets" @{ cookie = $tokenA.cookie; csrf = $tokenB.csrf } @{ subject = "$p csrf"; description = "A description long enough." }
+    Check "write with another session's csrf token -> 403" ($r.status -eq 403)
+    $r = Call POST "/api/v1/author/tickets" $tokenA @{ subject = "$p csrf"; description = "A description long enough." } @{ Origin = "https://evil.example" }
+    Check "write from a foreign Origin -> 403" ($r.status -eq 403 -and $r.json.error.code -eq "CSRF_INVALID")
     $r = Call GET "/api/v1/auth/me" $tokenA $null
     Check "GET /auth/me -> AUTHOR" ($r.status -eq 200 -and $r.json.role -eq "AUTHOR")
 
@@ -284,8 +319,17 @@ try {
     $r = Call PATCH "/api/v1/admin/tickets/$royaltyId" $admin @{ status = "OPEN" }
     Check "reopen RESOLVED -> OPEN clears resolvedAt" ($r.status -eq 200 -and $r.json.summary.status -eq "OPEN" -and $null -eq $r.json.resolvedAt)
 
+    $oldCookie = $tokenA.cookie
     $r = Call POST "/api/v1/auth/logout" $tokenA $null
-    Check "logout -> 204" ($r.status -eq 204)
+    Check "logout -> 204 and the cookie is deleted" ($r.status -eq 204 -and $r.setCookie -match "Max-Age=0")
+    $r = Call GET "/api/v1/author/books" @{ cookie = $oldCookie } $null
+    Check "a copy of the signed-out cookie is refused (revoked on the server)" ($r.status -eq 401)
+
+    # ---- sign-in throttling (an unknown address-and-email pair, so no real account is locked) ----
+    $lockEmail = "throttle.$([guid]::NewGuid().ToString('N'))@example.test"
+    for ($i = 0; $i -lt 5; $i++) { $null = Call POST "/api/v1/auth/login" $null @{ email = $lockEmail; password = "wrong" } }
+    $r = Call POST "/api/v1/auth/login" $null @{ email = $lockEmail; password = "wrong" }
+    Check "5 failed sign-ins -> 429 TOO_MANY_ATTEMPTS" ($r.status -eq 429 -and $r.json.error.code -eq "TOO_MANY_ATTEMPTS")
 }
 finally {
     if ($proc) { taskkill /PID $proc.Id /T /F | Out-Null }
@@ -300,6 +344,7 @@ finally {
         $env:PGPASSWORD = $env:DB_PASSWORD
         $pattern = $TicketSubjectPrefix -replace "'", "''"
         $cleanup = @"
+DELETE FROM attachments WHERE ticket_id IN (SELECT id FROM tickets WHERE subject LIKE '$pattern%');
 DELETE FROM ai_events WHERE ticket_id IN (SELECT id FROM tickets WHERE subject LIKE '$pattern%');
 DELETE FROM ticket_messages WHERE ticket_id IN (SELECT id FROM tickets WHERE subject LIKE '$pattern%');
 DELETE FROM tickets WHERE subject LIKE '$pattern%';

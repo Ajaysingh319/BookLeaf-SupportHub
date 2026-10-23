@@ -1,13 +1,17 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { EmptyState, ErrorMessage, PriorityChip, Spinner, StatusChip } from '../../components/feedback.tsx'
 import { api } from '../../lib/api.ts'
 import { formatAge, labelFor } from '../../lib/format.ts'
 import { useResource } from '../../lib/useResource.ts'
 import type { AdminTicketSummary, QueueFilters } from '../../types/api.ts'
+import { useAuth } from '../auth/useAuth.ts'
 import { useConfig, useFormatters } from '../config/useConfig.ts'
 
-const FILTER_KEYS = ['status', 'category', 'priority', 'from', 'to'] as const
+const FILTER_KEYS = ['status', 'category', 'priority', 'from', 'to', 'q', 'assignedTo', 'awaiting'] as const
+
+/** How long to wait after the last keystroke before searching. */
+const SEARCH_DEBOUNCE_MS = 350
 
 /** "Unresolved" tickets are the ones an admin still needs to act on. */
 function isUnresolved(ticket: AdminTicketSummary): boolean {
@@ -53,8 +57,34 @@ export function AdminQueuePage() {
     else next.delete('page')
     setParams(next)
   }
-  const clearFilters = () => setParams(new URLSearchParams(), { replace: true })
+  const clearFilters = () => {
+    setSearchText('')
+    setParams(new URLSearchParams(), { replace: true })
+  }
   const hasFilters = FILTER_KEYS.some((key) => params.get(key))
+
+  // The search box updates the URL shortly after typing stops, so each keystroke is not a request.
+  const [searchText, setSearchText] = useState(params.get('q') ?? '')
+  const searchTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(searchTimer.current), [])
+  const onSearchChange = (value: string) => {
+    setSearchText(value)
+    window.clearTimeout(searchTimer.current)
+    searchTimer.current = window.setTimeout(() => setFilter('q', value.trim()), SEARCH_DEBOUNCE_MS)
+  }
+
+  // "Assigned to": anyone, unassigned, or one of the admins (the signed-in admin is marked "me").
+  const { user } = useAuth()
+  const loadAdmins = useCallback((signal: AbortSignal) => api.adminListAdmins(signal), [])
+  const admins = useResource(loadAdmins)
+  const assigneeOptions = [
+    { value: '', label: 'Anyone' },
+    { value: 'unassigned', label: 'Unassigned' },
+    ...(admins.data ?? []).map((admin) => ({
+      value: admin.id,
+      label: admin.id === user?.id ? `${admin.name} (me)` : admin.name,
+    })),
+  ]
 
   const unresolvedTotal = stats.data
     ? (stats.data.byStatus.OPEN ?? 0) + (stats.data.byStatus.IN_PROGRESS ?? 0)
@@ -92,6 +122,38 @@ export function AdminQueuePage() {
       {stats.error && !stats.data && <ErrorMessage error={stats.error} onRetry={stats.reload} />}
 
       <form className="card filters" aria-label="Filter tickets" onSubmit={(event) => event.preventDefault()}>
+        <div className="field filter-wide">
+          <label htmlFor="f-search">Search</label>
+          <input
+            id="f-search"
+            type="search"
+            value={searchText}
+            onChange={(event) => onSearchChange(event.target.value)}
+            maxLength={100}
+            placeholder="Subject, author name or email, or book title"
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="f-assigned">Assigned to</label>
+          <select id="f-assigned" value={params.get('assignedTo') ?? ''} onChange={(e) => setFilter('assignedTo', e.target.value)}>
+            {assigneeOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field filter-check">
+          <label htmlFor="f-awaiting">
+            <input
+              id="f-awaiting"
+              type="checkbox"
+              checked={params.get('awaiting') === 'true'}
+              onChange={(e) => setFilter('awaiting', e.target.checked ? 'true' : '')}
+            />{' '}
+            Awaiting a reply from us
+          </label>
+        </div>
         <div className="field">
           <label htmlFor="f-status">Status</label>
           <select id="f-status" value={params.get('status') ?? ''} onChange={(e) => setFilter('status', e.target.value)}>
@@ -178,6 +240,7 @@ export function AdminQueuePage() {
                         </Link>
                         <p className="muted small">
                           {ticket.bookTitle ?? 'General / Account Level'}
+                          {ticket.awaitingReply && <span className="chip chip-awaiting">Awaiting reply</span>}
                           {ticket.needsManualReview && <span className="chip chip-review">Needs manual review</span>}
                         </p>
                       </td>

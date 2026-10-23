@@ -25,6 +25,14 @@ public final class AuthDtos {
     public record UserSummary(UUID id, String name, String email, Role role) {
     }
 
-    public record LoginResponse(String token, UserSummary user) {
+    /**
+     * The session itself is the HttpOnly cookie and is never in the body. csrfToken is what the app must
+     * send back in the X-CSRF-Token header on every write.
+     */
+    public record LoginResponse(UserSummary user, String csrfToken) {
+    }
+
+    /** The current session for the browser app: both null when nobody is signed in. */
+    public record SessionResponse(UserSummary user, String csrfToken) {
     }
 }

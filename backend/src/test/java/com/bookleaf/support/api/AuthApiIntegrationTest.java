@@ -19,14 +19,15 @@ class AuthApiIntegrationTest extends IntegrationTestBase {
     @Autowired private UserAccountRepository users;
 
     @Test
-    void loginReturnsATokenAndASafeProfile() throws Exception {
+    void loginSetsTheSessionCookieAndReturnsASafeProfileWithoutAnyTokenInTheBody() throws Exception {
         String result = body(post(null, "/api/v1/auth/login", Map.of("email", authorEmail(0), "password", authorPassword))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.token").isNotEmpty())
+                .andExpect(jsonPath("$.csrfToken").isNotEmpty())
+                .andExpect(jsonPath("$.token").doesNotExist())
                 .andExpect(jsonPath("$.user.role").value("AUTHOR"))
                 .andExpect(jsonPath("$.user.email").value(authorEmail(0)))
                 .andExpect(jsonPath("$.user.passwordHash").doesNotExist()));
-        assertThat(result).doesNotContain("passwordHash");
+        assertThat(result).doesNotContain("passwordHash").doesNotContain("eyJ");   // no JWT in the body
     }
 
     @Test

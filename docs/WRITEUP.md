@@ -11,13 +11,14 @@
 **Trade-offs.**
 - Short polling instead of WebSockets: simpler to build and deploy, a few seconds of latency.
 - Rule-based fallback keywords are blunt; they are a safety net, not a classifier.
-- A bearer token in `sessionStorage` is simple but weaker than HttpOnly cookies; I documented it rather than hide it.
+- Cookie sessions are safer than a script-readable token, but they need CSRF protection and a same-site deployment (the host must proxy `/api`, or serve both from one place). I accepted that cost. Session revocation and the sign-in throttle are held in memory, which suits one instance and would need a shared store to scale out.
+- Attachments are stored in PostgreSQL, checked by their real content type and size and always served as downloads: simple and safe for the volumes of a support desk, not for large media.
 - No RAG: the knowledge base is small and fixed, so putting it in the prompt is cheaper and easier to debug.
 - Tests run on an in-memory database for speed and portability; PostgreSQL-specific behaviour is covered by startup validation of the Flyway migrations and an end-to-end smoke script.
-- Verified so far: over 120 automated tests (including API integration tests with a fake AI that covers good, malformed, failing and slow answers), an end-to-end smoke test and manual browser checks. Live calls to the real AI provider are the main thing not yet exercised.
+- Verified so far: over 230 automated tests (212 backend, 21 client) (including API integration tests with a fake AI that covers good, malformed, failing and slow answers), an end-to-end smoke test and manual browser checks. Live calls to the real AI provider are the main thing not yet exercised.
 
 **Evolving to production.**
-- HttpOnly cookie sessions with CSRF protection, login rate limiting and lockout, token rotation, audit log of admin actions.
-- Real file attachments with malware scanning and object storage; email notifications; SSE for live updates at scale.
+- A shared store for session revocation and login throttling, refresh-token rotation and MFA for admins, an audit log of admin actions.
+- Object storage and malware scanning for attachments; email notifications; SSE for live updates at scale.
 - An evaluation set for classification accuracy and draft quality; track draft edit rate, latency and cost per ticket from the AI event log; add retrieval and policy versioning with citations when the knowledge base grows.
 - Observability (structured logs with the request id, metrics, alerts), backups, load tests, and automated integration and browser tests in CI.

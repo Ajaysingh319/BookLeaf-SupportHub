@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { api, toApiError, type ApiError } from '../../lib/api.ts'
 import { labelFor } from '../../lib/format.ts'
+import { useResource } from '../../lib/useResource.ts'
 import type { AdminTicketDetail, AdminTicketPatch } from '../../types/api.ts'
 import { useAuth } from '../auth/useAuth.ts'
 import { useConfig } from '../config/useConfig.ts'
@@ -14,6 +15,9 @@ export function TicketControls({ detail, onChanged }: { detail: AdminTicketDetai
   const { options } = useConfig()
   const summary = detail.summary
 
+  const loadAdmins = useCallback((signal: AbortSignal) => api.adminListAdmins(signal), [])
+  const admins = useResource(loadAdmins)
+  const [assignee, setAssignee] = useState(summary.assignedAdminId ?? '')
   const [category, setCategory] = useState(summary.category)
   const [priority, setPriority] = useState(summary.priority)
   const [status, setStatus] = useState<string>(summary.status)
@@ -119,11 +123,37 @@ export function TicketControls({ detail, onChanged }: { detail: AdminTicketDetai
           <span className="muted">Not assigned yet</span>
         )}
       </p>
-      {user && !assignedToMe && (
-        <button type="button" className="button button-secondary" onClick={() => void send({ assignedAdminId: user.id })} disabled={saving}>
-          Assign to me
+      <div className="field">
+        <label htmlFor="c-assignee">Assign to</label>
+        <select id="c-assignee" value={assignee} onChange={(event) => setAssignee(event.target.value)}>
+          <option value="">Choose an admin…</option>
+          {(admins.data ?? []).map((admin) => (
+            <option key={admin.id} value={admin.id}>
+              {admin.id === user?.id ? `${admin.name} (me)` : admin.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="form-actions">
+        <button
+          type="button"
+          className="button button-secondary"
+          onClick={() => void send({ assignedAdminId: assignee })}
+          disabled={saving || assignee === '' || assignee === summary.assignedAdminId}
+        >
+          Assign
         </button>
-      )}
+        {user && !assignedToMe && (
+          <button type="button" className="button button-secondary" onClick={() => void send({ assignedAdminId: user.id })} disabled={saving}>
+            Assign to me
+          </button>
+        )}
+        {summary.assignedAdminId && (
+          <button type="button" className="button button-secondary" onClick={() => void send({ unassign: true })} disabled={saving}>
+            Unassign
+          </button>
+        )}
+      </div>
     </section>
   )
 }

@@ -32,6 +32,13 @@ public final class TicketDtos {
             String description) {
     }
 
+    /** A follow-up message from the author on one of their own tickets. */
+    public record AuthorReplyRequest(
+            @NotBlank(message = "Message is required.")
+            @Size(max = ValidationLimits.MESSAGE_MAX, message = "Message must be {max} characters or fewer.")
+            String body) {
+    }
+
     public record TicketSummary(
             UUID id,
             String subject,
@@ -74,9 +81,11 @@ public final class TicketDtos {
             String bookTitle,
             Instant createdAt,
             Instant updatedAt,
-            List<MessageResponse> messages) {
+            List<MessageResponse> messages,
+            List<AttachmentInfo> attachments) {
 
-        public static TicketDetail from(Ticket ticket, List<TicketMessage> publicMessages) {
+        public static TicketDetail from(Ticket ticket, List<TicketMessage> publicMessages,
+                                        List<AttachmentInfo> attachments) {
             return new TicketDetail(
                     ticket.getId(),
                     ticket.getSubject(),
@@ -86,7 +95,8 @@ public final class TicketDtos {
                     ticket.getBook() == null ? null : ticket.getBook().getTitle(),
                     ticket.getCreatedAt(),
                     ticket.getUpdatedAt(),
-                    publicMessages.stream().map(MessageResponse::from).toList());
+                    publicMessages.stream().map(MessageResponse::from).toList(),
+                    attachments);
         }
     }
 }

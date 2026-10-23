@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createFormatters, firstName, formatAge, isInProduction, labelFor, parseDateOnly } from './format.ts'
+import { createFormatters, firstName, formatBytes, formatAge, isInProduction, labelFor, parseDateOnly } from './format.ts'
 
 // Locale and currency are inputs, as they are in the app (they come from the server's config).
 const indian = createFormatters({ locale: 'en-IN', currencyCode: 'INR' })
@@ -78,5 +78,16 @@ describe('formatAge', () => {
     expect(formatAge(5)).toBe('5 h')
     expect(formatAge(47)).toBe('47 h')
     expect(formatAge(52)).toBe('2 d 4 h')
+  })
+})
+
+describe('formatBytes', () => {
+  it('shows bytes, KB and MB in a short readable form', () => {
+    expect(formatBytes(0)).toBe('0 B')
+    expect(formatBytes(1023)).toBe('1023 B')
+    expect(formatBytes(1024)).toBe('1 KB')
+    expect(formatBytes(1536)).toBe('1.5 KB')
+    expect(formatBytes(5 * 1024 * 1024)).toBe('5 MB')
+    expect(formatBytes(1.25 * 1024 * 1024)).toBe('1.3 MB')
   })
 })

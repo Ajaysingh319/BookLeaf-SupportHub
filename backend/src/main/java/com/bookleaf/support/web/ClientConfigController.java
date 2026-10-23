@@ -26,6 +26,10 @@ public class ClientConfigController {
     public record Validation(int subjectMin, int subjectMax, int descriptionMin, int descriptionMax, int messageMax) {
     }
 
+    /** What the attach-a-file control offers; the server enforces the same limits. */
+    public record Attachments(int maxFileBytes, int maxFilesPerTicket, List<String> allowedTypes) {
+    }
+
     public record Policy(int royaltyPayoutDays, int minimumPayout) {
     }
 
@@ -51,6 +55,7 @@ public class ClientConfigController {
             int staleTicketHours,
             Policy policy,
             Validation validation,
+            Attachments attachments,
             Options options) {
     }
 
@@ -72,6 +77,8 @@ public class ClientConfigController {
                 new Validation(ValidationLimits.SUBJECT_MIN, ValidationLimits.SUBJECT_MAX,
                         ValidationLimits.DESCRIPTION_MIN, ValidationLimits.DESCRIPTION_MAX,
                         ValidationLimits.MESSAGE_MAX),
+                new Attachments(properties.attachments().maxFileBytes(), properties.attachments().maxFilesPerTicket(),
+                        properties.attachments().allowedTypes()),
                 options());
     }
 

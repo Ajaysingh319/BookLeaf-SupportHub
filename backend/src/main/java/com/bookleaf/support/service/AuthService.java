@@ -2,10 +2,9 @@ package com.bookleaf.support.service;
 
 import com.bookleaf.support.domain.UserAccount;
 import com.bookleaf.support.dto.AuthDtos.LoginRequest;
-import com.bookleaf.support.dto.AuthDtos.LoginResponse;
 import com.bookleaf.support.dto.AuthDtos.UserSummary;
 import com.bookleaf.support.repository.UserAccountRepository;
-import com.bookleaf.support.security.JwtService;
+import com.bookleaf.support.security.LoginThrottle;
 import com.bookleaf.support.web.error.ApiException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -20,23 +19,35 @@ public class AuthService {
 
     private final UserAccountRepository users;
     private final PasswordEncoder passwordEncoder;
-    private final JwtService jwtService;
+    private final LoginThrottle throttle;
+    /** A real hash of a throwaway value, so an unknown email costs the same time as a wrong password. */
+    private final String decoyHash;
 
-    public AuthService(UserAccountRepository users, PasswordEncoder passwordEncoder, JwtService jwtService) {
+    public AuthService(UserAccountRepository users, PasswordEncoder passwordEncoder, LoginThrottle throttle) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
-        this.jwtService = jwtService;
+        this.throttle = throttle;
+        this.decoyHash = passwordEncoder.encode(UUID.randomUUID().toString());
     }
 
+    /**
+     * Checks the credentials. The same error and the same work for an unknown email and a wrong password,
+     * so neither the message nor the timing reveals which accounts exist; failures are counted against the
+     * throttle and a locked address or account is refused before any password is checked.
+     */
     @Transactional(readOnly = true)
-    public LoginResponse login(LoginRequest request) {
+    public UserSummary authenticate(LoginRequest request, String remoteAddress) {
         String email = request.email().trim().toLowerCase(Locale.ROOT);
+        throttle.checkAllowed(remoteAddress, email);
+
         UserAccount user = users.findByEmail(email).orElse(null);
-        // Same message for an unknown email and a wrong password, so accounts can't be probed.
-        if (user == null || !passwordEncoder.matches(request.password(), user.getPasswordHash())) {
+        boolean valid = passwordEncoder.matches(request.password(), user == null ? decoyHash : user.getPasswordHash());
+        if (user == null || !valid) {
+            throttle.recordFailure(remoteAddress, email);
             throw new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Invalid email or password.");
         }
-        return new LoginResponse(jwtService.issue(user.getId(), user.getRole()), toSummary(user));
+        throttle.recordSuccess(remoteAddress, email);
+        return toSummary(user);
     }
 
     @Transactional(readOnly = true)

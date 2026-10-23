@@ -132,8 +132,10 @@ class AuthorApiIntegrationTest extends IntegrationTestBase {
 
     @Test
     void malformedJsonGetsAClearErrorNotA500() throws Exception {
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v1/author/tickets")
-                        .header("Authorization", "Bearer " + authorToken(0))
+        String session = authorToken(0);
+        mvc.perform(request(org.springframework.http.HttpMethod.POST, "/api/v1/author/tickets")
+                        .cookie(new jakarta.servlet.http.Cookie(cookieName, session))
+                        .header("X-CSRF-Token", csrfOf(session))
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content("{not json"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST_BODY"));

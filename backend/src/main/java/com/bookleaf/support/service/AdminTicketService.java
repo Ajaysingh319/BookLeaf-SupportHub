@@ -10,6 +10,7 @@ import com.bookleaf.support.domain.TicketMessage;
 import com.bookleaf.support.domain.TicketStatus;
 import com.bookleaf.support.domain.TicketStatusRules;
 import com.bookleaf.support.domain.UserAccount;
+import com.bookleaf.support.dto.AdminTicketDtos.AdminInfo;
 import com.bookleaf.support.dto.AdminTicketDtos.AiInfo;
 import com.bookleaf.support.dto.AdminTicketDtos.AuthorInfo;
 import com.bookleaf.support.dto.AdminTicketDtos.Detail;
@@ -21,6 +22,8 @@ import com.bookleaf.support.dto.AdminTicketDtos.ReplyRequest;
 import com.bookleaf.support.dto.AdminTicketDtos.Summary;
 import com.bookleaf.support.dto.BookResponse;
 import com.bookleaf.support.dto.PageResponse;
+import com.bookleaf.support.dto.ValidationLimits;
+import com.bookleaf.support.repository.AttachmentRepository;
 import com.bookleaf.support.repository.TicketMessageRepository;
 import com.bookleaf.support.repository.TicketQueueQuery;
 import com.bookleaf.support.repository.TicketRepository;
@@ -43,32 +46,53 @@ import java.util.UUID;
 @Service
 public class AdminTicketService {
 
+    /** The assignedTo filter value that selects tickets nobody has picked up yet. */
+    public static final String UNASSIGNED = "unassigned";
+
     private final int maxPageSize;
     private final TicketRepository tickets;
     private final TicketMessageRepository messages;
     private final TicketQueueQuery queue;
     private final UserAccountRepository users;
+    private final AttachmentRepository attachments;
 
     public AdminTicketService(TicketRepository tickets, TicketMessageRepository messages,
-                              TicketQueueQuery queue, UserAccountRepository users, AppProperties properties) {
+                              TicketQueueQuery queue, UserAccountRepository users,
+                              AttachmentRepository attachments, AppProperties properties) {
         this.maxPageSize = properties.pagination().maxSize();
         this.tickets = tickets;
         this.messages = messages;
         this.queue = queue;
         this.users = users;
+        this.attachments = attachments;
     }
 
     /** Dates are calendar days in UTC; "to" includes the whole day. */
     @Transactional(readOnly = true)
     public PageResponse<Summary> list(TicketStatus status, TicketCategory category, Priority priority,
-                                      LocalDate from, LocalDate to, int page, int size) {
+                                      LocalDate from, LocalDate to, String search, String assignedTo,
+                                      boolean awaitingReply, int page, int size) {
         if (from != null && to != null && to.isBefore(from)) {
             throw ApiException.validation("to", "End date must not be before the start date.");
+        }
+        String searchText = search == null ? null : search.strip();
+        if (searchText != null && searchText.length() > ValidationLimits.SEARCH_MAX) {
+            throw ApiException.validation("q", "Search text must be " + ValidationLimits.SEARCH_MAX + " characters or fewer.");
+        }
+        boolean unassigned = UNASSIGNED.equalsIgnoreCase(assignedTo);
+        UUID assignedAdminId = null;
+        if (assignedTo != null && !assignedTo.isBlank() && !unassigned) {
+            try {
+                assignedAdminId = UUID.fromString(assignedTo.strip());
+            } catch (IllegalArgumentException ex) {
+                throw ApiException.validation("assignedTo", "Use an admin id or \"" + UNASSIGNED + "\".");
+            }
         }
         TicketQueueQuery.Filter filter = new TicketQueueQuery.Filter(
                 status, category, priority,
                 from == null ? null : from.atStartOfDay(ZoneOffset.UTC).toInstant(),
-                to == null ? null : to.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant());
+                to == null ? null : to.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant(),
+                searchText, assignedAdminId, unassigned, awaitingReply);
         PageRequest pageRequest = PageRequest.of(
                 Math.max(page, 0), Math.min(Math.max(size, 1), maxPageSize));
         Instant now = Instant.now();
@@ -104,7 +128,10 @@ public class AdminTicketService {
     @Transactional
     public Detail update(UUID ticketId, PatchRequest request) {
         if (request.isEmpty()) {
-            throw ApiException.validation("body", "Provide at least one of status, category, priority or assignedAdminId.");
+            throw ApiException.validation("body", "Provide at least one of status, category, priority, assignedAdminId or unassign.");
+        }
+        if (Boolean.TRUE.equals(request.unassign()) && request.assignedAdminId() != null) {
+            throw ApiException.validation("unassign", "Choose either an assignee or unassign, not both.");
         }
         Ticket ticket = find(ticketId);
         if (request.status() != null) {
@@ -124,7 +151,18 @@ public class AdminTicketService {
                     .orElseThrow(() -> ApiException.validation("assignedAdminId", "Choose an existing admin."));
             ticket.setAssignedAdmin(admin);
         }
+        if (Boolean.TRUE.equals(request.unassign())) {
+            ticket.setAssignedAdmin(null);
+        }
         return toDetail(ticket);
+    }
+
+    /** The admins a ticket can be assigned to, by name. */
+    @Transactional(readOnly = true)
+    public List<AdminInfo> admins() {
+        return users.findByRoleOrderByNameAsc(Role.ADMIN).stream()
+                .map(admin -> new AdminInfo(admin.getId(), admin.getName(), admin.getEmail()))
+                .toList();
     }
 
     /** Internal notes are never shown to authors and do not change the ticket's updated time. */
@@ -185,6 +223,7 @@ public class AdminTicketService {
                 new AuthorInfo(author.getId(), author.getName(), author.getEmail(), author.getCity()),
                 ticket.getBook() == null ? null : BookResponse.from(ticket.getBook()),
                 new AiInfo(ticket.getAiOutcome(), ticket.getAiCategory(), ticket.getAiPriority(), ticket.getAiReason()),
-                messages.findByTicket_IdOrderByCreatedAtAsc(ticket.getId()).stream().map(Message::from).toList());
+                messages.findByTicket_IdOrderByCreatedAtAsc(ticket.getId()).stream().map(Message::from).toList(),
+                attachments.findInfoByTicketId(ticket.getId()));
     }
 }

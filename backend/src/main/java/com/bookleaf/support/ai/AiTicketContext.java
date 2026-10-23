@@ -38,11 +38,13 @@ public class AiTicketContext {
     @Transactional(readOnly = true)
     public Optional<PromptTicket> load(UUID ticketId) {
         return tickets.findById(ticketId).map(ticket -> {
-            List<String> replies = new ArrayList<>(
+            List<PromptTicket.Turn> conversation = new ArrayList<>(
                     messages.findByTicket_IdAndVisibilityOrderByCreatedAtDesc(
                                     ticketId, MessageVisibility.PUBLIC, PageRequest.of(0, recentReplies))
-                            .stream().map(TicketMessage::getBody).toList());
-            Collections.reverse(replies);
+                            .stream()
+                            .map(message -> new PromptTicket.Turn(message.getSender().getRole(), message.getBody()))
+                            .toList());
+            Collections.reverse(conversation);
             return new PromptTicket(
                     ticket.getSubject(),
                     ticket.getDescription(),
@@ -50,7 +52,7 @@ public class AiTicketContext {
                     ticket.getBook() == null ? null : BookFacts.from(ticket.getBook()),
                     ticket.getCategory(),
                     ticket.getPriority(),
-                    replies);
+                    conversation);
         });
     }
 

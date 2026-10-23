@@ -1,8 +1,10 @@
 import type {
+  AdminInfo,
   AdminTicketDetail,
   AdminTicketPatch,
   AdminTicketSummary,
   ApiErrorBody,
+  Attachment,
   Book,
   ClientConfig,
   CreateTicketInput,
@@ -13,13 +15,12 @@ import type {
   QueueStats,
   TicketDetail,
   TicketSummary,
-  UserSummary,
+  SessionResponse,
 } from '../types/api.ts'
 
 // Only the API address is configured here. It is not a secret; nothing else belongs in VITE_ variables.
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 const API = `${BASE_URL}/api/v1`
-const TOKEN_KEY = 'bookleaf.token'
 
 /** A failed API call, with the server's error code, field messages and request id when it sent them. */
 export class ApiError extends Error {
@@ -38,37 +39,28 @@ export class ApiError extends Error {
   }
 }
 
-// The token lives in sessionStorage: it ends with the tab and is never shared across tabs or
-// kept after the browser closes. Storage can throw (private windows, blocked cookies), so every access is guarded.
-export const tokenStore = {
-  get(): string | null {
-    try {
-      return sessionStorage.getItem(TOKEN_KEY)
-    } catch {
-      return null
-    }
-  },
-  set(token: string): void {
-    try {
-      sessionStorage.setItem(TOKEN_KEY, token)
-    } catch {
-      /* the session then lasts only until the page reloads */
-    }
-  },
-  clear(): void {
-    try {
-      sessionStorage.removeItem(TOKEN_KEY)
-    } catch {
-      /* nothing to clear */
-    }
-  },
+// The session itself is an HttpOnly cookie the browser sends on its own; scripts never see it. Only the CSRF
+// token (which the server hands out at sign-in and from /auth/session) is kept, in memory, and echoed on writes.
+let csrfToken: string | null = null
+
+/** Remember (or forget) the CSRF token for the current session. */
+export function setCsrfToken(token: string | null): void {
+  csrfToken = token
 }
 
 let unauthorizedHandler: (() => void) | null = null
 
-/** Called when the API rejects a stored token (expired or invalid) so the app can sign the user out. */
+/** Called when the API rejects the session (expired, signed out elsewhere or invalid) so the app can sign the user out. */
 export function setUnauthorizedHandler(handler: (() => void) | null): void {
   unauthorizedHandler = handler
+}
+
+/**
+ * Where the browser downloads an attachment from. It is a plain link: the session cookie goes along with it,
+ * and the server answers with a download (never a page the browser would run).
+ */
+export function attachmentUrl(role: 'author' | 'admin', ticketId: string, attachmentId: string): string {
+  return `${API}/${role}/tickets/${encodeURIComponent(ticketId)}/attachments/${encodeURIComponent(attachmentId)}`
 }
 
 export function toApiError(error: unknown): ApiError {
@@ -79,17 +71,19 @@ export function toApiError(error: unknown): ApiError {
 async function request<T>(
   method: string,
   path: string,
-  options: { body?: unknown; signal?: AbortSignal } = {},
+  options: { body?: unknown; form?: FormData; signal?: AbortSignal } = {},
 ): Promise<T> {
-  const token = tokenStore.get()
+  const hadSession = csrfToken !== null
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (options.body !== undefined) headers['Content-Type'] = 'application/json'
-  if (token) headers.Authorization = `Bearer ${token}`
+  if (csrfToken && method !== 'GET') headers['X-CSRF-Token'] = csrfToken
 
   let response: Response
   try {
-    const init: RequestInit = { method, headers }
+    const init: RequestInit = { method, headers, credentials: 'include' }
     if (options.body !== undefined) init.body = JSON.stringify(options.body)
+    // For a file upload the browser sets the multipart Content-Type (with its boundary) itself.
+    if (options.form) init.body = options.form
     if (options.signal) init.signal = options.signal
     response = await fetch(`${API}${path}`, init)
   } catch (error) {
@@ -111,8 +105,8 @@ async function request<T>(
 
   if (!response.ok) {
     const body = parsed as ApiErrorBody | null
-    if (response.status === 401 && token && path !== '/auth/login') {
-      tokenStore.clear()
+    if (response.status === 401 && hadSession && path !== '/auth/login') {
+      csrfToken = null
       unauthorizedHandler?.()
     }
     throw new ApiError(
@@ -130,7 +124,8 @@ export const api = {
   getConfig: (signal?: AbortSignal) => request<ClientConfig>('GET', '/config', signal ? { signal } : {}),
   login: (email: string, password: string) =>
     request<LoginResponse>('POST', '/auth/login', { body: { email, password } }),
-  me: (signal?: AbortSignal) => request<UserSummary>('GET', '/auth/me', signal ? { signal } : {}),
+  /** Who is signed in (if anyone): asked at startup, since the cookie is invisible to scripts. */
+  session: (signal?: AbortSignal) => request<SessionResponse>('GET', '/auth/session', signal ? { signal } : {}),
   logout: () => request<void>('POST', '/auth/logout'),
 
   listBooks: (signal?: AbortSignal) => request<Book[]>('GET', '/author/books', signal ? { signal } : {}),
@@ -139,6 +134,16 @@ export const api = {
   getTicket: (id: string, signal?: AbortSignal) =>
     request<TicketDetail>('GET', `/author/tickets/${encodeURIComponent(id)}`, signal ? { signal } : {}),
   createTicket: (input: CreateTicketInput) => request<TicketDetail>('POST', '/author/tickets', { body: input }),
+  /** A follow-up message on the author's own ticket (reopens a resolved ticket). */
+  authorReply: (id: string, body: string) =>
+    request<TicketDetail>('POST', `/author/tickets/${encodeURIComponent(id)}/replies`, { body: { body } }),
+
+  /** Attaches one file to the author's own ticket. */
+  uploadAttachment: (ticketId: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<Attachment>('POST', `/author/tickets/${encodeURIComponent(ticketId)}/attachments`, { form })
+  },
 
   // ---- admin ----
   adminListTickets: (filters: QueueFilters, page: number, size: number, signal?: AbortSignal) => {
@@ -148,6 +153,7 @@ export const api = {
     })
     return request<Page<AdminTicketSummary>>('GET', `/admin/tickets?${query}`, signal ? { signal } : {})
   },
+  adminListAdmins: (signal?: AbortSignal) => request<AdminInfo[]>('GET', '/admin/admins', signal ? { signal } : {}),
   adminStats: (signal?: AbortSignal) => request<QueueStats>('GET', '/admin/tickets/summary', signal ? { signal } : {}),
   adminGetTicket: (id: string, signal?: AbortSignal) =>
     request<AdminTicketDetail>('GET', `/admin/tickets/${encodeURIComponent(id)}`, signal ? { signal } : {}),

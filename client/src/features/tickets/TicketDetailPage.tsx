@@ -1,16 +1,21 @@
 import { useCallback } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import { EmptyState, ErrorMessage, Spinner, StatusChip } from '../../components/feedback.tsx'
-import { api } from '../../lib/api.ts'
+import { AttachmentList } from '../../components/AttachmentList.tsx'
+import { api, attachmentUrl } from '../../lib/api.ts'
 import { useResource } from '../../lib/useResource.ts'
 import { useConfig, useFormatters } from '../config/useConfig.ts'
+import { AttachFiles } from './AttachFiles.tsx'
+import { AuthorReplyForm } from './AuthorReplyForm.tsx'
 
 export function TicketDetailPage() {
   const { id = '' } = useParams()
   const location = useLocation()
   const { ticketPollMs } = useConfig()
   const { dateTime, time } = useFormatters()
-  const justCreated = (location.state as { justCreated?: boolean } | null)?.justCreated === true
+  const arrival = location.state as { justCreated?: boolean; failedUploads?: string[] } | null
+  const justCreated = arrival?.justCreated === true
+  const failedUploads = arrival?.failedUploads ?? []
 
   // TDD section 9: short polling while the page is open and visible (interval from server config).
   const load = useCallback((signal: AbortSignal) => api.getTicket(id, signal), [id])
@@ -42,6 +47,14 @@ export function TicketDetailPage() {
           Your ticket has been submitted. Our team will reply here, and this page updates automatically.
         </div>
       )}
+      {failedUploads.length > 0 && (
+        <div className="banner banner-warning" role="alert">
+          <p>Your ticket was submitted, but some files could not be attached. You can add them again below.</p>
+          {failedUploads.map((failure) => (
+            <p key={failure}>{failure}</p>
+          ))}
+        </div>
+      )}
       {ticket.error && (
         <div className="banner banner-warning" role="status">
           <p>We could not refresh this ticket just now. We will keep trying.</p>
@@ -59,10 +72,11 @@ export function TicketDetailPage() {
       <section className="card" aria-labelledby="query-heading">
         <h2 id="query-heading">Your query</h2>
         <p className="prewrap">{data.description}</p>
+        <AttachmentList attachments={data.attachments} hrefFor={(file) => attachmentUrl('author', data.id, file.id)} />
       </section>
 
       <section aria-labelledby="replies-heading">
-        <h2 id="replies-heading">Replies</h2>
+        <h2 id="replies-heading">Conversation</h2>
         {data.messages.length === 0 ? (
           <div className="card muted">
             No reply yet. Our team will respond here as soon as they can, and you do not need to refresh this page.
@@ -70,9 +84,16 @@ export function TicketDetailPage() {
         ) : (
           <ul className="messages" aria-live="polite">
             {data.messages.map((message) => (
-              <li key={message.id} className="card message">
+              <li key={message.id} className={`card message ${message.senderRole === 'AUTHOR' ? 'message-own' : ''}`}>
                 <p className="message-meta">
-                  <strong>{message.senderName}</strong> · Support team · {dateTime(message.createdAt)}
+                  {message.senderRole === 'AUTHOR' ? (
+                    <strong>You</strong>
+                  ) : (
+                    <>
+                      <strong>{message.senderName}</strong> · Support team
+                    </>
+                  )}{' '}
+                  · {dateTime(message.createdAt)}
                 </p>
                 <p className="prewrap">{message.body}</p>
               </li>
@@ -80,6 +101,9 @@ export function TicketDetailPage() {
           </ul>
         )}
       </section>
+
+      <AuthorReplyForm ticketId={data.id} status={data.status} onSent={ticket.reload} />
+      <AttachFiles ticketId={data.id} status={data.status} attachedCount={data.attachments.length} onDone={ticket.reload} />
 
       {ticket.lastUpdated && (
         <p className="muted small">

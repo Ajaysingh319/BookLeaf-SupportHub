@@ -1,14 +1,16 @@
-import { useCallback, useState, type FormEvent } from 'react'
+import { useCallback, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ErrorMessage } from '../../components/feedback.tsx'
 import { api, toApiError, type ApiError } from '../../lib/api.ts'
+import { problemWithFile, uploadAll } from '../../lib/attachments.ts'
+import { formatBytes } from '../../lib/format.ts'
 import { useResource } from '../../lib/useResource.ts'
 import { useConfig } from '../config/useConfig.ts'
 
 export function NewTicketPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { validation } = useConfig()
+  const { validation, attachments: limits } = useConfig()
   const loadBooks = useCallback((signal: AbortSignal) => api.listBooks(signal), [])
   const books = useResource(loadBooks)
 
@@ -20,6 +22,22 @@ export function NewTicketPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [error, setError] = useState<ApiError | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [files, setFiles] = useState<File[]>([])
+  const [fileProblems, setFileProblems] = useState<string[]>([])
+  const fileInput = useRef<HTMLInputElement>(null)
+
+  const chooseFiles = (chosen: File[]) => {
+    const messages: string[] = []
+    const kept = [...files]
+    chosen.forEach((file) => {
+      const problem = problemWithFile(file, limits, kept.length)
+      if (problem) messages.push(problem)
+      else kept.push(file)
+    })
+    setFiles(kept)
+    setFileProblems(messages)
+    if (fileInput.current) fileInput.current.value = ''
+  }
 
   // The same limits the server enforces, read from its config so the two can never disagree.
   const validate = (): Record<string, string> => {
@@ -53,7 +71,13 @@ export function NewTicketPage() {
         subject: subject.trim(),
         description: description.trim(),
       })
-      navigate(`/author/tickets/${ticket.id}`, { state: { justCreated: true } })
+      // The ticket exists first; files follow. A file that fails never loses the ticket: the next page says which.
+      const failedUploads = await uploadAll(
+        files,
+        (file) => api.uploadAttachment(ticket.id, file),
+        (error) => toApiError(error).message,
+      )
+      navigate(`/author/tickets/${ticket.id}`, { state: { justCreated: true, failedUploads } })
     } catch (caught) {
       const apiError = toApiError(caught)
       const serverFieldErrors: Record<string, string> = {}
@@ -132,12 +156,41 @@ export function NewTicketPage() {
         </div>
 
         <div className="field">
-          <label htmlFor="attachment">Attachment (optional)</label>
-          <input id="attachment" type="file" disabled aria-describedby="attachment-note" />
+          <label htmlFor="attachment">Attachments (optional)</label>
+          <input
+            id="attachment"
+            ref={fileInput}
+            type="file"
+            multiple
+            accept={limits.allowedTypes.join(',')}
+            onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))}
+            aria-describedby="attachment-note"
+          />
           <p id="attachment-note" className="muted small">
-            File uploads are not available yet. If photos help (for example a print defect), mention it above and our
-            team will ask you to share them.
+            Photos help, for example of a print defect. Up to {limits.maxFilesPerTicket} files (JPEG, PNG, WebP or PDF),{' '}
+            {formatBytes(limits.maxFileBytes)} each.
           </p>
+          {files.length > 0 && (
+            <ul className="attachments">
+              {files.map((file, index) => (
+                <li key={`${file.name}-${index}`}>
+                  {file.name} <span className="muted small">({formatBytes(file.size)})</span>{' '}
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => setFiles(files.filter((_, position) => position !== index))}
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {fileProblems.map((problem) => (
+            <p key={problem} className="field-error">
+              {problem}
+            </p>
+          ))}
         </div>
 
         <div className="form-actions">

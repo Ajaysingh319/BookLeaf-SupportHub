@@ -36,11 +36,14 @@ public final class TestProperties {
 
     private static AppProperties build(String secret, long ttlMinutes, AppProperties.Ai ai) {
         return new AppProperties(
-                new AppProperties.Auth(secret, ttlMinutes),
+                new AppProperties.Auth(secret, ttlMinutes, 720,
+                        new AppProperties.Auth.Cookie("bookleaf_session", false, "Lax"),
+                        new AppProperties.Auth.Throttle(5, 50, 15, 1000)),
                 new AppProperties.Cors("http://frontend.test"),
                 new AppProperties.Pagination(20, 50),
                 ai,
                 new AppProperties.Seed(false, "classpath:seed/bookleaf_sample_data.json", null, null, null, null),
-                new AppProperties.Ui("Test Portal", "USD", "en-US", 5000, 10000, 45, 1000, "In Production", 5, 48));
+                new AppProperties.Ui("Test Portal", "USD", "en-US", 5000, 10000, 45, 1000, "In Production", 5, 48),
+                new AppProperties.Attachments(1024, 3, java.util.List.of("image/jpeg", "image/png", "image/webp", "application/pdf")));
     }
 }

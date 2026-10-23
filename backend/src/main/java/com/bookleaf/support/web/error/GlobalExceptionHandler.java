@@ -4,9 +4,14 @@ import com.bookleaf.support.ai.AiUnavailableException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
+import com.bookleaf.support.config.AppProperties;
+import com.bookleaf.support.service.AttachmentService;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -22,6 +27,35 @@ import java.util.Map;
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    private final long maxFileBytes;
+
+    public GlobalExceptionHandler(AppProperties properties) {
+        this.maxFileBytes = properties.attachments().maxFileBytes();
+    }
+
+    /** The container refused an oversized upload before it reached the service. */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<Map<String, Object>> handleUploadTooLarge(HttpServletRequest request) {
+        ApiException ex = AttachmentService.fileTooLarge(maxFileBytes);
+        return respond(ex.getStatus(), ex.getCode(), ex.getMessage(), List.of(), request);
+    }
+
+    /** The request had no file part. */
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    public ResponseEntity<Map<String, Object>> handleMissingPart(MissingServletRequestPartException ex,
+                                                                 HttpServletRequest request) {
+        return respond(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "Please correct the highlighted fields.",
+                List.of(new ApiException.FieldDetail(ex.getRequestPartName(), "Choose a file to attach.")), request);
+    }
+
+    @ExceptionHandler(TooManyAttemptsException.class)
+    public ResponseEntity<Map<String, Object>> handleTooManyAttempts(TooManyAttemptsException ex,
+                                                                     HttpServletRequest request) {
+        return ResponseEntity.status(ex.getStatus())
+                .header(HttpHeaders.RETRY_AFTER, String.valueOf(ex.getRetryAfterSeconds()))
+                .body(ErrorBodies.build(ex.getCode(), ex.getMessage(), List.of(), ErrorBodies.requestId(request)));
+    }
 
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<Map<String, Object>> handleApi(ApiException ex, HttpServletRequest request) {

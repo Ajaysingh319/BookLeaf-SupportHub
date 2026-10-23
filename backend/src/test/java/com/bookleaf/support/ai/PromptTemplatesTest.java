@@ -85,7 +85,8 @@ class PromptTemplatesTest {
         AppProperties german = new AppProperties(base.auth(), base.cors(), base.pagination(), base.ai(), base.seed(),
                 new AppProperties.Ui(ui.brandName(), "EUR", "de-DE", ui.ticketPollMs(), ui.listPollMs(),
                         ui.royaltyPayoutDays(), ui.minimumPayout(), ui.inProductionStatusPrefix(),
-                        ui.dashboardRecentTickets(), ui.staleTicketHours()));
+                        ui.dashboardRecentTickets(), ui.staleTicketHours()),
+                base.attachments());
         PromptTemplates inGermany = new PromptTemplates(new DefaultResourceLoader(), german);
         BookFacts big = new BookFacts("T", "G", "Published & Live", null, new BigDecimal("1234567.5"), 1,
                 new BigDecimal("1234567"), BigDecimal.ZERO, BigDecimal.ZERO, null, null, List.of());
@@ -109,6 +110,23 @@ class PromptTemplatesTest {
         assertThat(user).contains("Status: In Production - Cover Design")
                 .contains("MRP: not available").contains("Publication date: not available")
                 .contains("Print partner: not available").contains("not listed anywhere yet");
+    }
+
+    @Test
+    void theRecentConversationIsLabelledAndTheLatestAuthorMessageIsAnswered() {
+        PromptTicket withTurns = new PromptTicket("Royalty", "I have not been paid.", "Priya", null,
+                TicketCategory.ROYALTY_PAYMENTS, Priority.HIGH, List.of(
+                        new PromptTicket.Turn(com.bookleaf.support.domain.Role.ADMIN, "We are checking this."),
+                        new PromptTicket.Turn(com.bookleaf.support.domain.Role.AUTHOR, "Any update yet?")));
+        String user = prompts.draftUser(withTurns);
+        assertThat(user).contains("- Support: We are checking this.").contains("- Author: Any update yet?")
+                .contains("The author has written again").contains("their latest message");
+
+        PromptTicket supportLast = new PromptTicket("Royalty", "I have not been paid.", "Priya", null,
+                TicketCategory.ROYALTY_PAYMENTS, Priority.HIGH, List.of(
+                        new PromptTicket.Turn(com.bookleaf.support.domain.Role.ADMIN, "We are checking this.")));
+        assertThat(prompts.draftUser(supportLast)).doesNotContain("written again");
+        assertThat(prompts.draftUser(ticket(null, "No messages yet."))).doesNotContain("Recent messages");
     }
 
     @Test

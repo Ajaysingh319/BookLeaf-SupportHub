@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api, ApiError, setUnauthorizedHandler, toApiError } from './api.ts'
+import { api, ApiError, setCsrfToken, setUnauthorizedHandler, toApiError } from './api.ts'
 
 function mockFetch(status: number, body?: unknown) {
   const fetchMock = vi.fn().mockResolvedValue(
@@ -15,6 +15,7 @@ function mockFetch(status: number, body?: unknown) {
 afterEach(() => {
   vi.unstubAllGlobals()
   setUnauthorizedHandler(null)
+  setCsrfToken(null)
 })
 
 describe('api client', () => {
@@ -62,6 +63,35 @@ describe('api client', () => {
     const error = await api.login('a@b.c', 'wrong').catch((e) => e)
     expect(error.code).toBe('INVALID_CREDENTIALS')
     expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('sends the cookie, and the CSRF token on writes only', async () => {
+    setCsrfToken('csrf-1')
+    const read = mockFetch(200, [])
+    await api.listBooks()
+    const [, getInit] = read.mock.calls[0] as [string, RequestInit]
+    expect(getInit.credentials).toBe('include')
+    expect((getInit.headers as Record<string, string>)['X-CSRF-Token']).toBeUndefined()
+
+    const write = mockFetch(204)
+    await api.logout()
+    const [, postInit] = write.mock.calls[0] as [string, RequestInit]
+    expect(postInit.credentials).toBe('include')
+    expect((postInit.headers as Record<string, string>)['X-CSRF-Token']).toBe('csrf-1')
+    expect((postInit.headers as Record<string, string>).Authorization).toBeUndefined()
+  })
+
+  it('signs the user out when a signed-in session is rejected, but not before sign-in', async () => {
+    const handler = vi.fn()
+    setUnauthorizedHandler(handler)
+    mockFetch(401, { error: { code: 'UNAUTHENTICATED', message: 'Please sign in to continue.' } })
+    await api.listBooks().catch(() => undefined)
+    expect(handler).not.toHaveBeenCalled()
+
+    setCsrfToken('csrf-1')
+    mockFetch(401, { error: { code: 'UNAUTHENTICATED', message: 'Please sign in to continue.' } })
+    await api.listBooks().catch(() => undefined)
+    expect(handler).toHaveBeenCalledTimes(1)
   })
 
   it('loads the server config without a token', async () => {
