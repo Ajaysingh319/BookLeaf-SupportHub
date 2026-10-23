@@ -8,6 +8,9 @@ import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.text.NumberFormat;
+import java.util.Locale;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -30,12 +33,16 @@ public class PromptTemplates {
 
     private final AppProperties.Triage triage;
     private final AppProperties.Draft draft;
+    private final Locale locale;
+    private final String currencyCode;
     private final String triageSystem;
     private final String draftSystem;
 
     public PromptTemplates(ResourceLoader resourceLoader, AppProperties properties) {
         this.triage = properties.ai().triage();
         this.draft = properties.ai().draft();
+        this.locale = Locale.forLanguageTag(properties.ui().locale());
+        this.currencyCode = properties.ui().currencyCode();
         String location = properties.ai().promptsLocation();
         AppProperties.Ui ui = properties.ui();
 
@@ -110,7 +117,7 @@ public class PromptTemplates {
         return text.toString();
     }
 
-    private static String bookSection(BookFacts book) {
+    private String bookSection(BookFacts book) {
         if (book == null) {
             return "Book record: none. This is a general / account-level query, so no account figures were provided; "
                     + "do not quote any.\n";
@@ -123,13 +130,27 @@ public class PromptTemplates {
                 + "- Genre: " + book.genre() + '\n'
                 + "- Status: " + book.status() + '\n'
                 + "- Publication date: " + valueOrNa(book.publicationDate()) + '\n'
-                + "- MRP: " + valueOrNa(book.mrp()) + '\n'
+                + "- MRP: " + money(book.mrp()) + '\n'
                 + "- Copies sold: " + valueOrNa(book.copiesSold()) + '\n'
-                + "- Royalty earned / paid / pending: " + valueOrNa(book.royaltyEarned()) + " / "
-                + valueOrNa(book.royaltyPaid()) + " / " + valueOrNa(book.royaltyPending()) + '\n'
+                + "- Royalty earned / paid / pending: " + money(book.royaltyEarned()) + " / "
+                + money(book.royaltyPaid()) + " / " + money(book.royaltyPending()) + '\n'
                 + "- Last royalty payout date: " + valueOrNa(book.lastRoyaltyPayoutDate()) + '\n'
                 + "- Print partner: " + valueOrNa(book.printPartner()) + '\n'
                 + "- Listed on: " + platforms + '\n';
+    }
+
+    /**
+     * An amount with its currency code and the configured locale's digit grouping (INR 11,970), no trailing
+     * zeros from the database scale, so the model quotes figures the same way every time. Null means not available.
+     */
+    private String money(BigDecimal amount) {
+        if (amount == null) {
+            return "not available";
+        }
+        NumberFormat format = NumberFormat.getNumberInstance(locale);
+        format.setMinimumFractionDigits(0);
+        format.setMaximumFractionDigits(2);
+        return currencyCode + " " + format.format(amount);
     }
 
     private static String valueOrNa(Object value) {

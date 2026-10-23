@@ -153,6 +153,8 @@ export interface AdminTicketDetail {
   summary: AdminTicketSummary
   description: string
   resolvedAt: string | null
+  /** When the latest public reply was sent to the author. */
+  repliedAt: string | null
   author: { id: string; name: string; email: string; city: string | null }
   book: Book | null
   ai: {

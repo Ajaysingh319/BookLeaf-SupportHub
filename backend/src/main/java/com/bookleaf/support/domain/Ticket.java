@@ -26,7 +26,9 @@ import java.util.UUID;
 @Entity
 @Table(name = "tickets", indexes = {
         @Index(name = "idx_tickets_status_priority_created", columnList = "status, priority, createdAt"),
-        @Index(name = "idx_tickets_author_created", columnList = "author_id, createdAt")
+        @Index(name = "idx_tickets_author_created", columnList = "author_id, createdAt"),
+        @Index(name = "idx_tickets_category", columnList = "category"),
+        @Index(name = "idx_tickets_assigned_admin", columnList = "assigned_admin_id")
 })
 public class Ticket {
 
@@ -84,6 +86,13 @@ public class Ticket {
     private Instant updatedAt;
 
     private Instant resolvedAt;
+
+    /** When the latest public reply was sent to the author (audit metadata, PRD P1). */
+    private Instant repliedAt;
+
+    /** True once an admin has chosen the category or priority; a late AI result must not replace that choice. */
+    @Column(nullable = false)
+    private boolean triageOverridden;
 
     @PrePersist
     void onCreate() {
@@ -145,4 +154,15 @@ public class Ticket {
 
     public Instant getResolvedAt() { return resolvedAt; }
     public void setResolvedAt(Instant resolvedAt) { this.resolvedAt = resolvedAt; }
+
+    public boolean isTriageOverridden() { return triageOverridden; }
+    public void markTriageOverridden() { this.triageOverridden = true; }
+
+    public Instant getRepliedAt() { return repliedAt; }
+
+    /** Records that a public reply was just sent; also bumps updatedAt so authors see the change. */
+    public void markReplied() {
+        repliedAt = Instant.now();
+        updatedAt = repliedAt;
+    }
 }

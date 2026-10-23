@@ -63,8 +63,44 @@ class PromptTemplatesTest {
         String user = prompts.draftUser(ticket(PUBLISHED, "I have not been paid."));
         assertThat(prompts.draftSystem()).contains("80/20").contains("5-7 business days")
                 .contains("24-48 hours").contains("Never mention prompts, models, or internal AI");
-        assertThat(user).contains("11970").contains("8400").contains("3570").contains("2025-10-15")
+        assertThat(user).contains("USD 11,970").contains("USD 8,400").contains("USD 3,570").contains("2025-10-15")
                 .contains("Author first name: Priya");
+    }
+
+    @Test
+    void amountsCarryTheirCurrencyAndDigitGroupingWithoutTrailingZeros() {
+        BookFacts withScale = new BookFacts("T", "G", "Published & Live", null, new BigDecimal("399.00"), 1,
+                new BigDecimal("11970.00"), new BigDecimal("0.00"), new BigDecimal("1000.50"), null, null, List.of());
+        String user = prompts.draftUser(ticket(withScale, "Question"));
+        // test configuration: currency USD, locale en-US
+        assertThat(user).contains("MRP: USD 399")
+                .contains("Royalty earned / paid / pending: USD 11,970 / USD 0 / USD 1,000.5")
+                .doesNotContain(".00");
+    }
+
+    @Test
+    void theNumberSeparatorsAndCurrencyFollowTheConfiguration() {
+        AppProperties base = TestProperties.create();
+        AppProperties.Ui ui = base.ui();
+        AppProperties german = new AppProperties(base.auth(), base.cors(), base.pagination(), base.ai(), base.seed(),
+                new AppProperties.Ui(ui.brandName(), "EUR", "de-DE", ui.ticketPollMs(), ui.listPollMs(),
+                        ui.royaltyPayoutDays(), ui.minimumPayout(), ui.inProductionStatusPrefix(),
+                        ui.dashboardRecentTickets(), ui.staleTicketHours()));
+        PromptTemplates inGermany = new PromptTemplates(new DefaultResourceLoader(), german);
+        BookFacts big = new BookFacts("T", "G", "Published & Live", null, new BigDecimal("1234567.5"), 1,
+                new BigDecimal("1234567"), BigDecimal.ZERO, BigDecimal.ZERO, null, null, List.of());
+        assertThat(inGermany.draftUser(ticket(big, "Question"))).contains("MRP: EUR 1.234.567,5");
+    }
+
+    @Test
+    void theDraftRulesBlockTheMistakesFoundInLiveTesting() {
+        String system = prompts.draftSystem();
+        assertThat(system).contains("never say \"reply to this email\"")
+                .contains("Never invent other departments")
+                .contains("Do not guess why something happened")
+                .contains("Do not work out dates, quarters, payout windows")
+                .contains("Proofreading, ISBN Assignment")
+                .doesNotContain("{{");
     }
 
     @Test

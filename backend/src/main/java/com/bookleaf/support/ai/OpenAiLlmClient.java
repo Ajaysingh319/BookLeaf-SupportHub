@@ -22,6 +22,9 @@ import java.util.Map;
  * Chat-completions client for an OpenAI-compatible endpoint (base URL, model and provider name all
  * come from configuration). The API key is read from the LLM_API_KEY environment variable and only
  * ever sent to the provider from this server. Provider error bodies are discarded, never forwarded.
+ *
+ * Quick transient failures (429 and 5xx) are retried a configured number of times; timeouts and other
+ * errors are not, so a slow provider never multiplies the wait.
  */
 @Component
 public class OpenAiLlmClient implements LlmClient {
@@ -73,31 +76,12 @@ public class OpenAiLlmClient implements LlmClient {
         if (request.jsonMode()) {
             body.put("response_format", Map.of("type", "json_object"));
         }
+        if (config.hasReasoningEffort()) {
+            body.put("reasoning_effort", config.reasoningEffort().trim());
+        }
 
         long started = System.nanoTime();
-        String raw;
-        try {
-            raw = http.post()
-                    .uri("/chat/completions")
-                    .header("Authorization", "Bearer " + config.apiKey().trim())
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(body)
-                    .retrieve()
-                    .body(String.class);
-        } catch (RestClientResponseException ex) {
-            int status = ex.getStatusCode().value();
-            String reason = status == 429 ? "rate_limited"
-                    : (status == 401 || status == 403) ? "auth_failed"
-                    : "provider_error_" + status;
-            log.warn("LLM call failed: {}", reason);
-            throw new AiUnavailableException(reason);
-        } catch (ResourceAccessException ex) {
-            log.warn("LLM call timed out or could not connect");
-            throw new AiUnavailableException("timeout_or_network", ex);
-        } catch (RuntimeException ex) {
-            log.warn("LLM call failed unexpectedly: {}", ex.getClass().getSimpleName());
-            throw new AiUnavailableException("provider_error", ex);
-        }
+        String raw = send(body);
         long latencyMs = (System.nanoTime() - started) / 1_000_000;
 
         try {
@@ -114,6 +98,48 @@ public class OpenAiLlmClient implements LlmClient {
             throw ex;
         } catch (RuntimeException ex) {
             throw new AiUnavailableException("unreadable_response", ex);
+        }
+    }
+
+    /** One HTTP call, retried for 429 and 5xx up to the configured number of attempts. */
+    private String send(Map<String, Object> body) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return http.post()
+                        .uri("/chat/completions")
+                        .header("Authorization", "Bearer " + config.apiKey().trim())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(body)
+                        .retrieve()
+                        .body(String.class);
+            } catch (RestClientResponseException ex) {
+                int status = ex.getStatusCode().value();
+                boolean transientFailure = status == 429 || status >= 500;
+                if (transientFailure && attempt < config.maxAttempts()) {
+                    log.info("LLM call got HTTP {}; retrying (attempt {} of {})", status, attempt + 1, config.maxAttempts());
+                    pause();
+                    continue;
+                }
+                String reason = status == 429 ? "rate_limited"
+                        : (status == 401 || status == 403) ? "auth_failed"
+                        : "provider_error_" + status;
+                log.warn("LLM call failed: {}", reason);
+                throw new AiUnavailableException(reason);
+            } catch (ResourceAccessException ex) {
+                log.warn("LLM call timed out or could not connect");
+                throw new AiUnavailableException("timeout_or_network", ex);
+            } catch (RuntimeException ex) {
+                log.warn("LLM call failed unexpectedly: {}", ex.getClass().getSimpleName());
+                throw new AiUnavailableException("provider_error", ex);
+            }
+        }
+    }
+
+    private void pause() {
+        try {
+            Thread.sleep(config.retryDelayMs());
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
         }
     }
 }

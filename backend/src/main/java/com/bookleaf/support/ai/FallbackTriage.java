@@ -29,7 +29,8 @@ import java.util.regex.Pattern;
 @Component
 public class FallbackTriage {
 
-    private record CategoryRule(TicketCategory category, Pattern pattern) {
+    /** priority is optional: when a rule sets one, it applies whenever that rule matched (unless severe). */
+    private record CategoryRule(TicketCategory category, Pattern pattern, Priority priority) {
     }
 
     private record PriorityRule(Priority base, Pattern highRequires, Pattern high) {
@@ -51,9 +52,11 @@ public class FallbackTriage {
     public FallbackTriage(Properties rules) {
         this.reason = required(rules, "fallback.reason");
         for (int i = 1; rules.getProperty("rule." + i + ".category") != null; i++) {
+            String rulePriority = rules.getProperty("rule." + i + ".priority");
             categoryRules.add(new CategoryRule(
                     TicketCategory.valueOf(required(rules, "rule." + i + ".category")),
-                    regex(required(rules, "rule." + i + ".patterns"))));
+                    regex(required(rules, "rule." + i + ".patterns")),
+                    rulePriority == null || rulePriority.isBlank() ? null : Priority.valueOf(rulePriority.trim())));
         }
         this.defaultCategory = TicketCategory.valueOf(required(rules, "default.category"));
         this.severe = regex(required(rules, "severe.patterns"));
@@ -96,22 +99,27 @@ public class FallbackTriage {
     public TriageResult classify(String subject, String description) {
         String text = ((subject == null ? "" : subject) + " " + (description == null ? "" : description))
                 .toLowerCase(Locale.ROOT);
-        TicketCategory category = category(text);
-        return new TriageResult(category, priority(category, text), reason);
+        CategoryRule matched = match(text);
+        TicketCategory category = matched == null ? defaultCategory : matched.category();
+        return new TriageResult(category, priority(category, matched, text), reason);
     }
 
-    private TicketCategory category(String text) {
+    /** The first category rule that matches, or null when none does. */
+    private CategoryRule match(String text) {
         for (CategoryRule rule : categoryRules) {
             if (rule.pattern().matcher(text).find()) {
-                return rule.category();
+                return rule;
             }
         }
-        return defaultCategory;
+        return null;
     }
 
-    private Priority priority(TicketCategory category, String text) {
+    private Priority priority(TicketCategory category, CategoryRule matched, String text) {
         if (severe.matcher(text).find()) {
             return Priority.CRITICAL;
+        }
+        if (matched != null && matched.priority() != null) {
+            return matched.priority();
         }
         PriorityRule rule = priorityRules.get(category);
         if (rule == null) {

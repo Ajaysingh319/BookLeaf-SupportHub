@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Positive;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
@@ -38,15 +39,24 @@ public record AppProperties(
             @NotBlank String providerName,
             @NotBlank String model,
             @NotBlank String baseUrl,
+            /** Optional. Sent as reasoning_effort only when set (needed for "thinking" models). */
+            String reasoningEffort,
             @NotBlank String promptsLocation,
             @NotBlank String fallbackRulesLocation,
             @Positive int connectTimeoutSeconds,
             @Positive int readTimeoutSeconds,
+            /** Total tries per call for quick, transient failures (429 and 5xx). 1 means no retry. */
+            @Positive int maxAttempts,
+            @PositiveOrZero long retryDelayMs,
             @Valid @NotNull Triage triage,
             @Valid @NotNull Draft draft) {
 
         public boolean hasApiKey() {
             return apiKey != null && !apiKey.isBlank();
+        }
+
+        public boolean hasReasoningEffort() {
+            return reasoningEffort != null && !reasoningEffort.isBlank();
         }
     }
 

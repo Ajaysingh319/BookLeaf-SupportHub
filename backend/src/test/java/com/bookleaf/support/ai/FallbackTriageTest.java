@@ -27,8 +27,9 @@ class FallbackTriageTest {
             "I received my author copies and the print quality is terrible. Images are blurry and pages are misaligned. | PRINTING_QUALITY | HIGH",
             "My book is published but it is showing as Currently Unavailable on Amazon. | DISTRIBUTION_AVAILABILITY | MEDIUM",
             "It has been 3 weeks and my book is still in typesetting. When will it be done? | BOOK_STATUS_PRODUCTION | MEDIUM",
-            "Can I update the description of my book on Amazon after it is already live? | ISBN_METADATA | LOW",
-            "Can I update my author bio? | ISBN_METADATA | LOW",
+            "Can I update the description of my book on Amazon after it is already live? | GENERAL_INQUIRY | LOW",
+            "Can I update my author bio? | GENERAL_INQUIRY | LOW",
+            "How do I get an ISBN under my own imprint? | ISBN_METADATA | MEDIUM",
             "Hello, I just wanted to say thank you for the great experience. | GENERAL_INQUIRY | MEDIUM",
     })
     void classifiesTheBriefsSampleQueries(String text, TicketCategory category, Priority priority) {
@@ -71,6 +72,23 @@ class FallbackTriageTest {
         assertThat(banana.priority()).isEqualTo(Priority.LOW);
         assertThat(banana.reason()).isEqualTo("custom reason");
         assertThat(custom1.classify("A meteor", "approaches").priority()).isEqualTo(Priority.CRITICAL);
+    }
+
+    @Test
+    void aRuleCanSetItsOwnPriorityButSevereLanguageStillWins() {
+        Properties custom = new Properties();
+        custom.setProperty("fallback.reason", "r");
+        custom.setProperty("rule.1.category", "GENERAL_INQUIRY");
+        custom.setProperty("rule.1.priority", "LOW");
+        custom.setProperty("rule.1.patterns", "banana");
+        custom.setProperty("default.category", "GENERAL_INQUIRY");
+        custom.setProperty("severe.patterns", "meteor");
+        custom.setProperty("default.priority", "HIGH");
+        FallbackTriage custom1 = new FallbackTriage(custom);
+
+        assertThat(custom1.classify("banana", "x").priority()).isEqualTo(Priority.LOW);        // the rule's own priority
+        assertThat(custom1.classify("apple", "x").priority()).isEqualTo(Priority.HIGH);        // no rule: the default
+        assertThat(custom1.classify("banana", "meteor").priority()).isEqualTo(Priority.CRITICAL);
     }
 
     @Test

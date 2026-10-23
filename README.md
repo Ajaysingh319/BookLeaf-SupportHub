@@ -6,7 +6,7 @@ An author support and communication portal for BookLeaf Publishing. Authors sign
 - **Admin portal:** ticket queue with filters, ticket detail, category/priority overrides, assignment, internal notes, AI-drafted replies.
 - **AI:** classification, priority score and reply drafting from the BookLeaf knowledge base, with a rule-based fallback so the system works when the AI is down.
 
-> **Status:** all functionality is built and tested locally. Not yet done: the live deployment, the `.env` for production, and live testing of the AI provider (see [Known limitations](#known-limitations-and-next-steps)).
+> **Status:** all functionality is built and tested locally, and the AI has been verified against the real Gemini API. Not yet done: the live deployment and the production `.env` (see [Known limitations](#known-limitations-and-next-steps)).
 
 ## Live demo and credentials
 
@@ -45,6 +45,8 @@ Browser (React)  ──HTTPS/JSON──▶  Spring Boot API  ──JDBC──▶
 - **Persist before AI.** A ticket is saved first. Triage then runs in the background after the transaction commits, so an AI outage can never block or roll back ticket creation.
 - **Public replies and internal notes** are one `TicketMessage` table with a `visibility` flag. Every author query filters on `PUBLIC`, and the author DTOs have no field that could carry an internal note.
 - **AI suggestion vs final value:** `aiCategory`/`aiPriority` keep what the model said; `category`/`priority` are the working values an admin can override.
+- **Versioned migrations.** The schema is created by Flyway (`backend/src/main/resources/db/migration`, applied automatically at startup) and Hibernate only *validates* it (`JPA_DDL_AUTO=validate`), so entities and schema cannot drift apart silently. An existing database without migration history is adopted as version 1.
+- **Admin choices are never overwritten by a late AI answer.** If an admin sets the category or priority while triage is still running, the AI result is stored only as the suggestion.
 - **No hardcoded configuration.** See [Configuration](#configuration).
 - **The client holds no copies of server rules.** It reads `GET /api/v1/config` at startup: limits, poll intervals, policy figures, locale/currency, category/priority/status labels and the allowed status transitions.
 
@@ -97,7 +99,7 @@ cd backend
 ### 4. Run the backend and the client
 
 ```bash
-cd backend && ./mvnw spring-boot:run          # API on SERVER_PORT
+cd backend && ./mvnw spring-boot:run          # API on PORT
 cd client && cp .env.example .env && npm install && npm run dev   # app on http://localhost:5173
 ```
 
@@ -106,11 +108,13 @@ Set `DEV_API_PROXY_TARGET` in `client/.env` to the backend address.
 ### 5. Tests
 
 ```bash
-cd backend && ./mvnw test -Dtest='*Test'     # unit tests (parser, fallback rules, prompts, JWT, status rules)
+cd backend && ./mvnw test                    # unit tests and API integration tests (no setup needed)
 cd client && npm test && npm run build       # unit tests, type-check and production build
 ```
 
-The end-to-end smoke test starts the backend, then checks login, role separation, ownership, validation, the full admin workflow and the AI-unavailable fallback, and removes its test tickets:
+The backend tests need no PostgreSQL, `.env` or environment variables: the integration tests run the real application (filters, controllers, services, JPA) against an in-memory database seeded from the sample dataset, with a **fake AI provider** so every AI path (good answer, malformed answer, rate limit, timeout, slow answer) is tested without a key. They cover the TDD section 13 cases: authors see only their own data, authors cannot call admin endpoints, invalid book ids are rejected, tickets survive AI failures, admins can reply and add notes, internal notes never reach authors, password hashing and verification, status transitions, prompt contents, and AI cost and privacy limits.
+
+The end-to-end smoke test is a separate check against a real PostgreSQL database. It starts the backend, then checks login, role separation, ownership, validation, the full admin workflow and the AI-unavailable fallback, and removes its test tickets:
 
 ```powershell
 cd backend
@@ -123,7 +127,7 @@ Environment-specific values and secrets are never in source code. They come from
 
 | Variable | Secret | Purpose |
 |---|---|---|
-| `SERVER_PORT` | | API port |
+| `PORT` | | API port (hosts usually provide it) |
 | `DB_URL`, `DB_USERNAME` | | PostgreSQL connection (JDBC URL, app user) |
 | `DB_PASSWORD` | yes | App user's password |
 | `JPA_DDL_AUTO` | | `update` for development, `validate` once migrations are used |
@@ -132,6 +136,7 @@ Environment-specific values and secrets are never in source code. They come from
 | `CLIENT_ORIGIN` | | Exact frontend origin allowed by CORS |
 | `LLM_API_KEY` | yes | Provider key. Optional: leave unset to run without AI |
 | `LLM_PROVIDER_NAME`, `LLM_MODEL`, `LLM_BASE_URL` | | Provider label (for logs), model id, OpenAI-compatible base URL |
+| `LLM_REASONING_EFFORT` | | Optional. Needed for "thinking" models (Gemini 3.x): `none`, `minimal` or `low`. Leave unset for models that do not support it |
 | `APP_BRAND_NAME`, `APP_CURRENCY_CODE`, `APP_LOCALE` | | Display settings sent to the client (ISO 4217 code, BCP 47 locale) |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_NAME` | | Admin account created by the seed |
 | `SEED_AUTHOR_PASSWORD`, `SEED_ADMIN_PASSWORD` | yes | Demo passwords, only needed when seeding |
@@ -152,7 +157,13 @@ The API key is never sent to the browser. `.env` files are git-ignored; only `.e
 - *Drafting* uses the BookLeaf knowledge base (company, royalty policy, ISBN, printing, distribution, production stages, tone guidelines), response patterns condensed from the brief's sample table, and the **verified book record** (status, MRP, copies sold, royalty earned/paid/pending, last payout, print partner, platforms). The prompt tells the model to use only those figures, to say "the team needs to verify" when something is missing, never to invent payout dates or statuses, and to start with an acknowledgement and end with a clear next step and timeline. Missing fields are passed as "not available".
 - The prompt text, knowledge base and fallback rules are plain files in `backend/src/main/resources/ai/`, editable without code changes. Policy numbers in them (payout days, minimum payout) are filled in from configuration, and the category list comes from the code's enum, so nothing drifts.
 
-**Model choice.** The client speaks the OpenAI chat-completions format, so the provider is configuration: base URL, model and key. The plan is Google Gemini through its OpenAI-compatible endpoint, using a fast, low-cost model: classification and short drafting do not need a large model, and low latency and cost matter for a queue that processes many tickets. The TDD suggested gpt-4o-mini; the assignment allows any provider. *The Gemini endpoint has not been tested yet* (no key at the time of writing), so verify JSON-mode behaviour when you add the key. If the provider rejects JSON mode, the strict parser treats any malformed reply as a failure and the fallback applies.
+**Model choice.** The client speaks the OpenAI chat-completions format, so the provider is configuration: base URL, model and key. It runs on Google Gemini through its OpenAI-compatible endpoint (`https://generativelanguage.googleapis.com/v1beta/openai`) with `gemini-3.5-flash`: classification and short drafting do not need a large model, and low latency and cost matter for a queue that processes many tickets. The TDD suggested gpt-4o-mini; the assignment allows any provider.
+
+**Verified against the real API** (live runs on the brief's sample queries):
+- Triage: all 5 live classifications matched the brief's expected category and priority, in about 3 s with about 330 input and 30 output tokens. A ticket with "asked three times, urgent" came back Critical.
+- Drafts: about 2.5 s, about 1,600 input and 215 output tokens. Reviewing them led to prompt rules against invented departments, the wrong reply channel, guessed dates and quarters, and wrong production-stage order, and to showing amounts with their currency and digit grouping.
+- Findings that shaped the client: Gemini 3.x are "thinking" models whose hidden reasoning tokens count against the output limit and truncate the answer, so `LLM_REASONING_EFFORT=none` is set and the token ceilings are generous (they are caps, not costs). Google answers transient `429`/`503`, so one quick retry is configured (`app.ai.max-attempts`). Some model ids retire or stall (`gemini-2.5-flash` returned 404; `gemini-3.8-flash` did not answer), so check the model list for your key before choosing.
+- **Quota:** a free Google key allows only about 20 generate requests per day per model. A demo or evaluation needs a key with billing enabled, or a different model per day; when the quota is exhausted the system keeps working through the fallback.
 
 **Output validation.** The triage reply must be a JSON object with exactly the three fields, a category and priority that are exactly one of the allowed values, and a short reason. Anything else (extra fields, unknown values, prose, empty) counts as a failed AI call. A markdown code fence around the JSON is tolerated.
 
@@ -222,7 +233,7 @@ Base path `/api/v1`. JSON in and out. Protected routes need `Authorization: Bear
 |---|---|
 | `GET /admin/tickets` | Queue. Filters: `status`, `category`, `priority`, `from`, `to` (dates, `yyyy-MM-dd`, UTC, `to` inclusive); `page`, `size`. Order: unresolved first, then priority Critical→Low, then oldest first. Rows include author, book, assignee, age in hours and a manual-review flag. |
 | `GET /admin/tickets/summary` | Counts by status, unresolved counts by priority, unassigned unresolved count. |
-| `GET /admin/tickets/{ticketId}` | Ticket, author, full book record, AI info (outcome, suggestion, reason), public replies and internal notes. |
+| `GET /admin/tickets/{ticketId}` | Ticket, author, full book record, AI info (outcome, suggestion, reason), when the last reply was sent, public replies and internal notes. |
 | `PATCH /admin/tickets/{ticketId}` | Change `status`, `category`, `priority`, `assignedAdminId` (only the fields sent). Status moves follow the table above; the assignee must be an admin. AI suggestions are left untouched. |
 | `POST /admin/tickets/{ticketId}/notes` | Body `{body}` → `201`. Internal note, never visible to authors. |
 | `POST /admin/tickets/{ticketId}/ai-draft` | Returns `{draft}` for the admin to edit. Nothing is saved or sent. `503 AI_UNAVAILABLE` if the AI cannot help. |
@@ -246,14 +257,13 @@ docs/WRITEUP.md        one-page write-up
 
 ## Known limitations and next steps
 
-- **Not yet done:** live deployment and URL; production `.env`; live verification of the AI provider (prompt quality, JSON mode, latency and cost on real tickets). The AI paths are unit-tested and the fallback path is end-to-end tested, but no real model call has been made yet.
+- **Not yet done:** live deployment and URL; production `.env`. The AI was exercised live on the brief's sample queries (see above), but classification accuracy has only been measured on 5 live samples and draft quality reviewed by reading about 13 drafts; a larger labelled set is the next step.
 - **Auth:** the token is kept in `sessionStorage` (it ends with the tab) and is valid until it expires; there is no revocation, refresh or login rate limiting. Production should use HttpOnly cookies with CSRF protection, token rotation and rate limiting (TDD sections 5 and 17).
-- **Schema:** Hibernate `ddl-auto=update` creates tables for development; production should use versioned migrations (Flyway).
 - **Real time:** polling, not SSE/WebSockets.
 - **Tickets:** authors cannot reply to a ticket after the first message, so reopen-on-reply does not exist (TDD section 8 allows documenting this). An admin cannot unassign a ticket. Resolved and closed tickets sort oldest-first like the rest.
 - **Attachments:** UI placeholder only, as the brief allows.
 - **API docs:** this README section is the documentation; there is no generated OpenAPI file.
-- **Tests:** unit tests plus an end-to-end smoke script. Automated integration tests against a throwaway database (for example Testcontainers) and browser tests would be the next step.
+- **Tests:** the backend has unit and API integration tests (on an in-memory H2 database, so SQL that is specific to PostgreSQL is covered by the smoke script and startup validation, not by the unit suite) and the client has unit tests. There are no automated browser tests; running the same suite against PostgreSQL (for example with Testcontainers) would be the next step.
 - **AI quality:** add a labelled evaluation set for category accuracy, track the rate at which admins edit drafts, and move to retrieval only when the knowledge base grows beyond what fits in a prompt.
 
 ## Deviations from the design documents

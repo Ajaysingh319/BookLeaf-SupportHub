@@ -88,7 +88,8 @@ export function AdminTicketPage() {
         <PriorityChip priority={summary.priority} />
       </header>
       <p className="muted">
-        Raised {dateTime(summary.createdAt)} · waiting {formatAge(summary.ageHours)}
+        Raised {dateTime(summary.createdAt)} · waiting {formatAge(summary.ageHours)} ·{' '}
+        {detail.repliedAt ? `last reply sent ${dateTime(detail.repliedAt)}` : 'no reply sent yet'}
       </p>
 
       <div className="admin-layout">

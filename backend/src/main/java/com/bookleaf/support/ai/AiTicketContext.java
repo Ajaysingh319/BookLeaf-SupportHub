@@ -56,8 +56,9 @@ public class AiTicketContext {
 
     /**
      * Stores the triage outcome. With a successful AI answer the suggestion is saved separately
-     * and also becomes the starting value of the final fields; on fallback only the final
-     * fields change and the AI fields stay empty. Skipped if triage already ran.
+     * and also becomes the starting value of the final fields (unless an admin has already chosen
+     * them); on fallback only the final fields change and the AI fields stay empty. Skipped if
+     * triage already ran.
      */
     @Transactional
     public void applyTriage(UUID ticketId, TriageResult result, boolean fromAi) {
@@ -65,8 +66,12 @@ public class AiTicketContext {
         if (ticket == null || ticket.getAiOutcome() != AiOutcome.PENDING) {
             return;
         }
-        ticket.setCategory(result.category());
-        ticket.setPriority(result.priority());
+        // If an admin already chose a category or priority, keep their choice: the AI result is then
+        // only recorded as a suggestion.
+        if (!ticket.isTriageOverridden()) {
+            ticket.setCategory(result.category());
+            ticket.setPriority(result.priority());
+        }
         ticket.setAiReason(result.reason());
         if (fromAi) {
             ticket.setAiCategory(result.category());

@@ -33,13 +33,13 @@ foreach ($name in "DB_PASSWORD", "AUTH_SECRET", "SEED_AUTHOR_PASSWORD", "SEED_AD
     }
     if (-not [Environment]::GetEnvironmentVariable($name, "Process")) { throw "Environment variable $name is not set." }
 }
-foreach ($name in "SERVER_PORT", "SEED_ADMIN_EMAIL", "DB_URL", "DB_USERNAME") {
+foreach ($name in "PORT", "SEED_ADMIN_EMAIL", "DB_URL", "DB_USERNAME") {
     if (-not $settings[$name]) { throw "$name is missing from $envFile" }
 }
 $authorPw = $env:SEED_AUTHOR_PASSWORD
 $adminPw = $env:SEED_ADMIN_PASSWORD
 $adminEmail = $settings["SEED_ADMIN_EMAIL"]
-$base = "http://localhost:$($settings['SERVER_PORT'])"
+$base = "http://localhost:$($settings['PORT'])"
 $env:LLM_API_KEY = ""
 
 # ---- expectations come from the sample dataset ----
@@ -197,7 +197,7 @@ try {
     Check "AI off: royalty ticket -> ROYALTY_PAYMENTS / HIGH, flagged for manual review" ($royalty.json.summary.category -eq "ROYALTY_PAYMENTS" -and $royalty.json.summary.priority -eq "HIGH" -and $royalty.json.ai.outcome -eq "FALLBACK" -and $royalty.json.summary.needsManualReview -eq $true)
     Check "AI off: no AI suggestion is stored" ($null -eq $royalty.json.ai.suggestedCategory -and $null -eq $royalty.json.ai.suggestedPriority)
     $bio = WaitForTriage $bioId $admin
-    Check "AI off: bio update -> ISBN_METADATA / LOW" ($bio.json.summary.priority -eq "LOW" -and $bio.json.summary.category -eq "ISBN_METADATA")
+    Check "AI off: bio update -> GENERAL_INQUIRY / LOW" ($bio.json.summary.priority -eq "LOW" -and $bio.json.summary.category -eq "GENERAL_INQUIRY")
     $general = WaitForTriage $generalId $admin
     Check "AI off: general thanks -> GENERAL_INQUIRY / MEDIUM" ($general.json.summary.category -eq "GENERAL_INQUIRY" -and $general.json.summary.priority -eq "MEDIUM")
     $isbn = WaitForTriage $isbnId $admin
@@ -212,8 +212,8 @@ try {
     $highRows = @($smokeRows | Where-Object { $_.priority -eq "HIGH" })
     Check "equal priority: older ticket first" ([DateTimeOffset]::Parse([string]$highRows[0].createdAt) -lt [DateTimeOffset]::Parse([string]$highRows[1].createdAt))
     Check "queue rows show author, age and created time" ($smokeRows[0].authorName -and $null -ne $smokeRows[0].ageHours -and $smokeRows[0].createdAt)
-    $r = Call GET "/api/v1/admin/tickets?priority=LOW&category=ISBN_METADATA&size=50" $admin $null
-    Check "filter by priority + category" ($r.status -eq 200 -and ($r.json.data | Where-Object { $_.priority -ne "LOW" -or $_.category -ne "ISBN_METADATA" }).Count -eq 0 -and ($r.json.data.id -contains $bioId))
+    $r = Call GET "/api/v1/admin/tickets?priority=LOW&category=GENERAL_INQUIRY&size=50" $admin $null
+    Check "filter by priority + category" ($r.status -eq 200 -and ($r.json.data | Where-Object { $_.priority -ne "LOW" -or $_.category -ne "GENERAL_INQUIRY" }).Count -eq 0 -and ($r.json.data.id -contains $bioId))
     $r = Call GET "/api/v1/admin/tickets?status=CLOSED&size=50" $admin $null
     Check "filter by status with no matches -> empty list" ($r.status -eq 200 -and $r.json.data.Count -eq 0 -and $r.json.pagination.totalItems -eq 0)
     $today = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")

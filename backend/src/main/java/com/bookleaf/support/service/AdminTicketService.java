@@ -112,9 +112,11 @@ public class AdminTicketService {
         }
         if (request.category() != null) {
             ticket.setCategory(request.category());
+            ticket.markTriageOverridden();
         }
         if (request.priority() != null) {
             ticket.setPriority(request.priority());
+            ticket.markTriageOverridden();
         }
         if (request.assignedAdminId() != null) {
             UserAccount admin = users.findById(request.assignedAdminId())
@@ -141,7 +143,7 @@ public class AdminTicketService {
             applyStatus(ticket, request.status());
         }
         messages.save(newMessage(ticket, adminId, request.body(), MessageVisibility.PUBLIC));
-        ticket.touch();
+        ticket.markReplied();
         return toDetail(ticket);
     }
 
@@ -179,6 +181,7 @@ public class AdminTicketService {
                 Summary.from(ticket, Instant.now()),
                 ticket.getDescription(),
                 ticket.getResolvedAt(),
+                ticket.getRepliedAt(),
                 new AuthorInfo(author.getId(), author.getName(), author.getEmail(), author.getCity()),
                 ticket.getBook() == null ? null : BookResponse.from(ticket.getBook()),
                 new AiInfo(ticket.getAiOutcome(), ticket.getAiCategory(), ticket.getAiPriority(), ticket.getAiReason()),

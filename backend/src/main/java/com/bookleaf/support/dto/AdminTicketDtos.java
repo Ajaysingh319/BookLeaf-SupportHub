@@ -94,6 +94,7 @@ public final class AdminTicketDtos {
             Summary summary,
             String description,
             Instant resolvedAt,
+            Instant repliedAt,
             AuthorInfo author,
             BookResponse book,
             AiInfo ai,

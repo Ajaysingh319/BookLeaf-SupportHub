@@ -13,11 +13,11 @@
 - Rule-based fallback keywords are blunt; they are a safety net, not a classifier.
 - A bearer token in `sessionStorage` is simple but weaker than HttpOnly cookies; I documented it rather than hide it.
 - No RAG: the knowledge base is small and fixed, so putting it in the prompt is cheaper and easier to debug.
-- Hibernate auto-schema for speed of development; migrations come before production.
-- Verified so far: unit tests, an end-to-end smoke test (AI-off path) and manual browser checks. Live AI calls are the main thing not yet exercised.
+- Tests run on an in-memory database for speed and portability; PostgreSQL-specific behaviour is covered by startup validation of the Flyway migrations and an end-to-end smoke script.
+- Verified so far: over 120 automated tests (including API integration tests with a fake AI that covers good, malformed, failing and slow answers), an end-to-end smoke test and manual browser checks. Live calls to the real AI provider are the main thing not yet exercised.
 
 **Evolving to production.**
-- Versioned migrations, HttpOnly cookie sessions with CSRF protection, login rate limiting and lockout, token rotation, audit log of admin actions.
+- HttpOnly cookie sessions with CSRF protection, login rate limiting and lockout, token rotation, audit log of admin actions.
 - Real file attachments with malware scanning and object storage; email notifications; SSE for live updates at scale.
 - An evaluation set for classification accuracy and draft quality; track draft edit rate, latency and cost per ticket from the AI event log; add retrieval and policy versioning with citations when the knowledge base grows.
 - Observability (structured logs with the request id, metrics, alerts), backups, load tests, and automated integration and browser tests in CI.
