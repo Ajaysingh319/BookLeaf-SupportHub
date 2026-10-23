@@ -1,5 +1,6 @@
 package com.bookleaf.support.web.error;
 
+import com.bookleaf.support.ai.AiUnavailableException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +26,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<Map<String, Object>> handleApi(ApiException ex, HttpServletRequest request) {
         return respond(ex.getStatus(), ex.getCode(), ex.getMessage(), ex.getDetails(), request);
+    }
+
+    /** The AI could not help. The admin is told to write the reply manually; no provider details leak. */
+    @ExceptionHandler(AiUnavailableException.class)
+    public ResponseEntity<Map<String, Object>> handleAiUnavailable(AiUnavailableException ex,
+                                                                   HttpServletRequest request) {
+        log.info("AI request failed for request {}: {}", ErrorBodies.requestId(request), ex.reasonCode());
+        return respond(HttpStatus.SERVICE_UNAVAILABLE, "AI_UNAVAILABLE",
+                "AI drafting is unavailable right now. You can write the reply manually.", List.of(), request);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

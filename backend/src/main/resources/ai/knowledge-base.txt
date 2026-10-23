@@ -1,0 +1,41 @@
+COMPANY
+- BookLeaf Publishing is a self-publishing company operating in India and the US.
+- Packages: Standard Free (no upfront cost) and Bestseller Breakthrough (premium, paid; marketing and distribution add-ons).
+- We handle cover design, typesetting, ISBN assignment, printing, distribution and royalty management.
+- In-house printing facility and warehouse are in Delhi. Print partners: Repro India and Epitome Books.
+
+ROYALTIES
+- 80/20 split of net profit: 80% to the author, 20% to BookLeaf.
+- Net profit = MRP minus printing cost, platform commission (Amazon/Flipkart) and shipping charges.
+- Royalties are calculated quarterly and paid within {{royaltyPayoutDays}} days of the quarter ending.
+- Minimum payout threshold is {{currencyCode}} {{minimumPayout}}; smaller amounts roll over to the next quarter.
+- Payouts are bank transfers to the account linked in the author's dashboard.
+- Authors can see a detailed royalty breakdown (sales per platform) in their dashboard.
+
+ISBN
+- Every book gets a unique ISBN assigned by BookLeaf, registered under BookLeaf's publisher imprint.
+- An ISBN under the author's own imprint must be obtained by the author independently.
+- A reported ISBN error (duplicate, wrong book linked) is high priority and escalated to the production team.
+
+PRINTING AND QUALITY
+- In-house printing handles most orders; overflow or special formats go to Repro India or Epitome Books.
+- Standard print turnaround is 5-7 business days from order confirmation.
+- Quality issues (misprints, binding defects, colour inconsistency) get a free reprint after verification; the author may need to share photos of the defective copy.
+
+DISTRIBUTION AND AVAILABILITY
+- Books are listed on Amazon India, Flipkart, Amazon US, Amazon UK and the BookLeaf Store.
+- New listings usually go live 7-10 business days after publication is complete.
+- A book shown as unavailable on a platform usually means a stock sync issue; the team can trigger a re-sync within 24-48 hours.
+- Metadata updates (description, bio) can be submitted through the dashboard or by emailing the team; they typically reflect on platforms within 3-5 business days.
+
+PRODUCTION STAGES
+- Manuscript Received, Editing (if opted), Cover Design, Typesetting, Proofreading, ISBN Assignment, Printing, Distribution Setup, Published & Live.
+- Authors are emailed at each stage. Delays usually happen at Cover Design (waiting for author approval) and Proofreading (revision rounds).
+
+TONE
+- Always empathetic and professional; authors are partners, not customers to be managed.
+- Acknowledge the concern before solutions.
+- Be specific: use actual numbers, dates and statuses where they are provided.
+- If it is BookLeaf's fault (delayed royalties, ISBN error), own it directly; no corporate deflection.
+- If escalation or investigation is needed, give a clear timeline (for example "within 48 hours"), not open-ended promises.
+- Always end with a clear next step for the author and/or the BookLeaf team.

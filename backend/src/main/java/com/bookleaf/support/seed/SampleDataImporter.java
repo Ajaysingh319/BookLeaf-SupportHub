@@ -1,11 +1,11 @@
 package com.bookleaf.support.seed;
 
+import com.bookleaf.support.config.AppProperties;
 import com.bookleaf.support.domain.Book;
 import com.bookleaf.support.domain.Role;
 import com.bookleaf.support.domain.UserAccount;
 import com.bookleaf.support.repository.BookRepository;
 import com.bookleaf.support.repository.UserAccountRepository;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,6 +15,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Loads the sample dataset into the database.
@@ -23,36 +24,27 @@ import java.util.List;
  * import again updates existing rows instead of duplicating them. Passwords are hashed
  * only when an account is first created, so a re-run never resets a password.
  * Business figures are copied exactly as supplied and never recalculated.
+ * Account details and demo passwords come from configuration (SEED_* environment variables).
  */
 @Service
 public class SampleDataImporter {
 
-    static final String ADMIN_NAME = "BookLeaf Support Admin";
-
     private final UserAccountRepository users;
     private final BookRepository books;
     private final PasswordEncoder passwordEncoder;
-    private final String authorPassword;
-    private final String adminEmail;
-    private final String adminPassword;
+    private final AppProperties.Seed seed;
 
-    public SampleDataImporter(
-            UserAccountRepository users,
-            BookRepository books,
-            PasswordEncoder passwordEncoder,
-            @Value("${app.seed.author-password}") String authorPassword,
-            @Value("${app.seed.admin-email}") String adminEmail,
-            @Value("${app.seed.admin-password}") String adminPassword) {
+    public SampleDataImporter(UserAccountRepository users, BookRepository books,
+                              PasswordEncoder passwordEncoder, AppProperties properties) {
         this.users = users;
         this.books = books;
         this.passwordEncoder = passwordEncoder;
-        this.authorPassword = authorPassword;
-        this.adminEmail = adminEmail;
-        this.adminPassword = adminPassword;
+        this.seed = properties.seed();
     }
 
     @Transactional
     public ImportSummary importDataset(JsonNode root) {
+        requireSeedSettings();
         int authorCount = 0;
         int bookCount = 0;
         for (JsonNode authorNode : root.path("authors")) {
@@ -67,17 +59,29 @@ public class SampleDataImporter {
         return new ImportSummary(authorCount, bookCount);
     }
 
+    /** The demo account settings are only needed for a seed run, so they are checked here. */
+    private void requireSeedSettings() {
+        List<String> missing = new ArrayList<>();
+        if (isBlank(seed.authorPassword())) missing.add("SEED_AUTHOR_PASSWORD");
+        if (isBlank(seed.adminEmail())) missing.add("SEED_ADMIN_EMAIL");
+        if (isBlank(seed.adminName())) missing.add("SEED_ADMIN_NAME");
+        if (isBlank(seed.adminPassword())) missing.add("SEED_ADMIN_PASSWORD");
+        if (!missing.isEmpty()) {
+            throw new IllegalStateException("Cannot seed: set these environment variables first: " + String.join(", ", missing));
+        }
+    }
+
     private UserAccount upsertAuthor(JsonNode node) {
         String sourceId = requiredText(node, "author_id");
         UserAccount author = users.findBySourceAuthorId(sourceId).orElseGet(() -> {
             UserAccount created = new UserAccount();
             created.setSourceAuthorId(sourceId);
             created.setRole(Role.AUTHOR);
-            created.setPasswordHash(passwordEncoder.encode(authorPassword));
+            created.setPasswordHash(passwordEncoder.encode(seed.authorPassword()));
             return created;
         });
         author.setName(requiredText(node, "name"));
-        author.setEmail(requiredText(node, "email").toLowerCase());
+        author.setEmail(requiredText(node, "email").toLowerCase(Locale.ROOT));
         author.setPhone(text(node, "phone"));
         author.setCity(text(node, "city"));
         author.setJoinedDate(date(node, "joined_date"));
@@ -107,16 +111,20 @@ public class SampleDataImporter {
     }
 
     private void upsertAdmin() {
-        String email = adminEmail.toLowerCase();
+        String email = seed.adminEmail().toLowerCase(Locale.ROOT);
         UserAccount admin = users.findByEmail(email).orElseGet(() -> {
             UserAccount created = new UserAccount();
             created.setEmail(email);
             created.setRole(Role.ADMIN);
-            created.setPasswordHash(passwordEncoder.encode(adminPassword));
+            created.setPasswordHash(passwordEncoder.encode(seed.adminPassword()));
             return created;
         });
-        admin.setName(ADMIN_NAME);
+        admin.setName(seed.adminName());
         users.save(admin);
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     /** Returns the text value, or null when the field is missing or JSON null. */

@@ -1,5 +1,6 @@
 package com.bookleaf.support.domain;
 
+import com.bookleaf.support.dto.ValidationLimits;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -39,7 +40,7 @@ public class TicketMessage {
     @JoinColumn(name = "sender_id", nullable = false)
     private UserAccount sender;
 
-    @Column(nullable = false, length = 10000)
+    @Column(nullable = false, length = ValidationLimits.MESSAGE_MAX)
     private String body;
 
     @Enumerated(EnumType.STRING)

@@ -1,5 +1,6 @@
 package com.bookleaf.support.domain;
 
+import com.bookleaf.support.dto.ValidationLimits;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -42,10 +43,10 @@ public class Ticket {
     @JoinColumn(name = "book_id")
     private Book book;
 
-    @Column(nullable = false, length = 160)
+    @Column(nullable = false, length = ValidationLimits.SUBJECT_MAX)
     private String subject;
 
-    @Column(nullable = false, length = 10000)
+    @Column(nullable = false, length = ValidationLimits.DESCRIPTION_MAX)
     private String description;
 
     @Enumerated(EnumType.STRING)
@@ -93,6 +94,11 @@ public class Ticket {
 
     @PreUpdate
     void onUpdate() {
+        updatedAt = Instant.now();
+    }
+
+    /** Marks the ticket as changed now, so a public reply is visible to the author's next refresh. */
+    public void touch() {
         updatedAt = Instant.now();
     }
 

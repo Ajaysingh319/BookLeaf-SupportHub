@@ -1,11 +1,11 @@
 package com.bookleaf.support.security;
 
+import com.bookleaf.support.config.AppProperties;
 import com.bookleaf.support.domain.Role;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.SecretKey;
@@ -19,16 +19,19 @@ import java.util.UUID;
 @Service
 public class JwtService {
 
+    /** HS256 needs a key of at least 256 bits. */
+    private static final int MIN_SECRET_BYTES = 32;
+
     private final SecretKey key;
     private final Duration ttl;
 
-    public JwtService(@Value("${app.auth.secret}") String secret,
-                      @Value("${app.auth.token-ttl-minutes}") long ttlMinutes) {
-        if (secret == null || secret.getBytes(StandardCharsets.UTF_8).length < 32) {
-            throw new IllegalStateException("AUTH_SECRET must be set and at least 32 characters long.");
+    public JwtService(AppProperties properties) {
+        String secret = properties.auth().secret();
+        if (secret == null || secret.getBytes(StandardCharsets.UTF_8).length < MIN_SECRET_BYTES) {
+            throw new IllegalStateException("AUTH_SECRET must be set and at least " + MIN_SECRET_BYTES + " characters long.");
         }
         this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
-        this.ttl = Duration.ofMinutes(ttlMinutes);
+        this.ttl = Duration.ofMinutes(properties.auth().tokenTtlMinutes());
     }
 
     public String issue(UUID userId, Role role) {

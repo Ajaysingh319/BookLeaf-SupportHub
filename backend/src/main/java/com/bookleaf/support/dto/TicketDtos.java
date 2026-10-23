@@ -22,11 +22,13 @@ public final class TicketDtos {
             UUID bookId,
 
             @NotBlank(message = "Subject is required.")
-            @Size(min = 3, max = 160, message = "Subject must be between 3 and 160 characters.")
+            @Size(min = ValidationLimits.SUBJECT_MIN, max = ValidationLimits.SUBJECT_MAX,
+                    message = "Subject must be between {min} and {max} characters.")
             String subject,
 
             @NotBlank(message = "Description is required.")
-            @Size(min = 10, max = 10000, message = "Description must be between 10 and 10,000 characters.")
+            @Size(min = ValidationLimits.DESCRIPTION_MIN, max = ValidationLimits.DESCRIPTION_MAX,
+                    message = "Description must be between {min} and {max} characters.")
             String description) {
     }
 

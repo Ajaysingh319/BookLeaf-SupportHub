@@ -13,11 +13,11 @@ public final class AuthDtos {
 
     public record LoginRequest(
             @NotBlank(message = "Email is required.")
-            @Size(max = 254, message = "Email is too long.")
+            @Size(max = ValidationLimits.EMAIL_MAX, message = "Email is too long.")
             String email,
 
             @NotBlank(message = "Password is required.")
-            @Size(max = 128, message = "Password is too long.")
+            @Size(max = ValidationLimits.PASSWORD_MAX, message = "Password is too long.")
             String password) {
     }
 

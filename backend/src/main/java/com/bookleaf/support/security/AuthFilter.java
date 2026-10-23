@@ -21,7 +21,7 @@ import java.util.List;
 /**
  * The single place where API access is decided, server-side:
  * <ul>
- *   <li>/api/v1/auth/login is public;</li>
+ *   <li>/api/v1/auth/login, /api/v1/health and /api/v1/config are public;</li>
  *   <li>every other /api/v1 route needs a valid bearer token;</li>
  *   <li>/api/v1/author/** is for authors only and /api/v1/admin/** for admins only.</li>
  * </ul>
@@ -34,6 +34,8 @@ public class AuthFilter extends OncePerRequestFilter {
 
     private static final String API_PREFIX = "/api/v1/";
     private static final String LOGIN_PATH = "/api/v1/auth/login";
+    private static final String HEALTH_PATH = "/api/v1/health";
+    private static final String CONFIG_PATH = "/api/v1/config";
     private static final String AUTHOR_PREFIX = "/api/v1/author/";
     private static final String ADMIN_PREFIX = "/api/v1/admin/";
 
@@ -51,7 +53,9 @@ public class AuthFilter extends OncePerRequestFilter {
         // CORS preflight requests carry no token; Spring's CORS handling answers them.
         return !path.startsWith(API_PREFIX)
                 || "OPTIONS".equalsIgnoreCase(request.getMethod())
-                || path.equals(LOGIN_PATH);
+                || path.equals(LOGIN_PATH)
+                || path.equals(HEALTH_PATH)
+                || path.equals(CONFIG_PATH);
     }
 
     @Override

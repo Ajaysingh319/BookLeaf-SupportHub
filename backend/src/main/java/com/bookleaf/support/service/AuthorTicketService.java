@@ -1,5 +1,7 @@
 package com.bookleaf.support.service;
 
+import com.bookleaf.support.ai.TicketCreatedEvent;
+import com.bookleaf.support.config.AppProperties;
 import com.bookleaf.support.domain.Book;
 import com.bookleaf.support.domain.MessageVisibility;
 import com.bookleaf.support.domain.Ticket;
@@ -12,6 +14,7 @@ import com.bookleaf.support.repository.TicketMessageRepository;
 import com.bookleaf.support.repository.TicketRepository;
 import com.bookleaf.support.repository.UserAccountRepository;
 import com.bookleaf.support.web.error.ApiException;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -23,26 +26,29 @@ import java.util.UUID;
 @Service
 public class AuthorTicketService {
 
-    static final int MAX_PAGE_SIZE = 50;
-
+    private final int maxPageSize;
     private final TicketRepository tickets;
     private final TicketMessageRepository messages;
     private final BookRepository books;
     private final UserAccountRepository users;
+    private final ApplicationEventPublisher events;
 
     public AuthorTicketService(TicketRepository tickets, TicketMessageRepository messages,
-                               BookRepository books, UserAccountRepository users) {
+                               BookRepository books, UserAccountRepository users,
+                               ApplicationEventPublisher events, AppProperties properties) {
+        this.maxPageSize = properties.pagination().maxSize();
         this.tickets = tickets;
         this.messages = messages;
         this.books = books;
         this.users = users;
+        this.events = events;
     }
 
     @Transactional(readOnly = true)
     public PageResponse<TicketSummary> list(UUID authorId, int page, int size) {
         PageRequest pageRequest = PageRequest.of(
                 Math.max(page, 0),
-                Math.min(Math.max(size, 1), MAX_PAGE_SIZE),
+                Math.min(Math.max(size, 1), maxPageSize),
                 Sort.by(Sort.Direction.DESC, "createdAt"));
         return PageResponse.of(tickets.findByAuthor_Id(authorId, pageRequest), TicketSummary::from);
     }
@@ -64,6 +70,8 @@ public class AuthorTicketService {
         ticket.setSubject(request.subject().trim());
         ticket.setDescription(request.description().trim());
         Ticket saved = tickets.save(ticket);
+        // Handled only after this transaction commits, on a background thread.
+        events.publishEvent(new TicketCreatedEvent(saved.getId()));
         return TicketDetail.from(saved, List.of());
     }
 

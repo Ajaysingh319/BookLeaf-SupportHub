@@ -1,12 +1,13 @@
 package com.bookleaf.support.seed;
 
+import com.bookleaf.support.config.AppProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.Resource;
+import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -28,13 +29,11 @@ public class SampleDataSeeder implements ApplicationRunner {
     private final ObjectMapper objectMapper;
     private final Resource dataset;
 
-    public SampleDataSeeder(
-            SampleDataImporter importer,
-            ObjectMapper objectMapper,
-            @Value("${app.seed.resource}") Resource dataset) {
+    public SampleDataSeeder(SampleDataImporter importer, ObjectMapper objectMapper,
+                            ResourceLoader resourceLoader, AppProperties properties) {
         this.importer = importer;
         this.objectMapper = objectMapper;
-        this.dataset = dataset;
+        this.dataset = resourceLoader.getResource(properties.seed().resource());
     }
 
     @Override

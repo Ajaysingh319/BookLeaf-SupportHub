@@ -45,7 +45,7 @@ public class AuthorController {
     public PageResponse<TicketSummary> tickets(
             @RequestAttribute(AuthUser.REQUEST_ATTRIBUTE) AuthUser user,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "${app.pagination.default-size}") int size) {
         return ticketService.list(user.id(), page, size);
     }
 
