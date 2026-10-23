@@ -1,0 +1,5 @@
+package com.bookleaf.support.domain;
+
+public enum TicketCategory {
+    ROYALTY_PAYMENTS, ISBN_METADATA, PRINTING_QUALITY, DISTRIBUTION_AVAILABILITY, BOOK_STATUS_PRODUCTION, GENERAL_INQUIRY
+}

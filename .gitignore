@@ -1,0 +1,20 @@
+# IDE
+.idea/
+*.iml
+
+# Build output
+target/
+node_modules/
+dist/
+
+# Secrets and local env files
+.env
+.env.*
+!.env.example
+
+# Local archives and assignment files
+*.zip
+BookLeaf_PRD_TDD_Package/
+
+# OS
+Thumbs.db
