@@ -3,7 +3,8 @@
 
 FROM eclipse-temurin:17-jdk AS build
 WORKDIR /app
-COPY . .
+# Render builds from the repository root, so the backend folder is copied explicitly.
+COPY backend/ ./
 RUN chmod +x mvnw && ./mvnw -q -DskipTests package
 
 FROM eclipse-temurin:17-jre
