@@ -1,62 +1,65 @@
-import { useState, type FormEvent } from 'react'
-import { Navigate, useLocation, useNavigate } from 'react-router-dom'
-import { Spinner } from '../../components/feedback.tsx'
-import { type ApiError, toApiError } from '../../lib/api.ts'
-import { useConfig } from '../config/useConfig.ts'
-import { homePathFor, useAuth } from './useAuth.ts'
+import { useState, type FormEvent } from "react";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { Spinner } from "../../components/feedback.tsx";
+import { type ApiError, toApiError } from "../../lib/api.ts";
+import { useConfig } from "../config/useConfig.ts";
+import { homePathFor, useAuth } from "./useAuth.ts";
 
 interface LocationState {
-  from?: string
+  from?: string;
 }
 
 export function LoginPage() {
-  const { user, status, sessionExpired, login } = useAuth()
-  const { brandName } = useConfig()
-  const navigate = useNavigate()
-  const location = useLocation()
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
-  const [error, setError] = useState<ApiError | null>(null)
-  const [submitting, setSubmitting] = useState(false)
+  const { user, status, sessionExpired, login } = useAuth();
+  const { brandName } = useConfig();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [error, setError] = useState<ApiError | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  if (status === 'checking') return <Spinner label="Checking your session…" />
-  if (user) return <Navigate to={homePathFor(user.role)} replace />
+  if (status === "checking") return <Spinner label="Checking your session…" />;
+  if (user) return <Navigate to={homePathFor(user.role)} replace />;
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const problems: Record<string, string> = {}
-    if (!email.trim()) problems.email = 'Enter your email address.'
-    if (!password) problems.password = 'Enter your password.'
-    setFieldErrors(problems)
-    setError(null)
-    if (Object.keys(problems).length > 0) return
+    event.preventDefault();
+    const problems: Record<string, string> = {};
+    if (!email.trim()) problems.email = "Enter your email address.";
+    if (!password) problems.password = "Enter your password.";
+    setFieldErrors(problems);
+    setError(null);
+    if (Object.keys(problems).length > 0) return;
 
-    setSubmitting(true)
+    setSubmitting(true);
     try {
-      const signedIn = await login(email, password)
+      const signedIn = await login(email, password);
       // Return to the page they were trying to open, but only if it belongs to their role.
-      const from = (location.state as LocationState | null)?.from
-      const home = homePathFor(signedIn.role)
-      const area = signedIn.role === 'ADMIN' ? '/admin' : '/author'
-      navigate(from && from.startsWith(area) ? from : home, { replace: true })
+      const from = (location.state as LocationState | null)?.from;
+      const home = homePathFor(signedIn.role);
+      const area = signedIn.role === "ADMIN" ? "/admin" : "/author";
+      navigate(from && from.startsWith(area) ? from : home, { replace: true });
     } catch (caught) {
-      const apiError = toApiError(caught)
-      const serverFieldErrors: Record<string, string> = {}
+      const apiError = toApiError(caught);
+      const serverFieldErrors: Record<string, string> = {};
       apiError.details.forEach((detail) => {
-        serverFieldErrors[detail.field] = detail.message
-      })
-      setFieldErrors(serverFieldErrors)
-      setError(apiError)
-      setSubmitting(false)
+        serverFieldErrors[detail.field] = detail.message;
+      });
+      setFieldErrors(serverFieldErrors);
+      setError(apiError);
+      setSubmitting(false);
     }
-  }
+  };
 
   return (
     <main className="login-page">
       <div className="card login-card">
         <h1>{brandName}</h1>
-        <p className="muted">Sign in to see your books, royalties and support tickets.</p>
+        <p className="muted">
+          Sign in to see your books, royalties and support tickets.
+        </p>
 
         {sessionExpired && !error && (
           <div className="banner banner-info" role="status">
@@ -66,7 +69,9 @@ export function LoginPage() {
         {error && Object.keys(fieldErrors).length === 0 && (
           <div className="banner banner-error" role="alert">
             <p>{error.message}</p>
-            {error.requestId && error.status >= 500 && <p className="muted small">Reference: {error.requestId}</p>}
+            {error.requestId && error.status >= 500 && (
+              <p className="muted small">Reference: {error.requestId}</p>
+            )}
           </div>
         )}
 
@@ -76,11 +81,11 @@ export function LoginPage() {
             <input
               id="email"
               type="email"
-              autoComplete="username"
+              autoComplete="off"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               aria-invalid={Boolean(fieldErrors.email)}
-              aria-describedby={fieldErrors.email ? 'email-error' : undefined}
+              aria-describedby={fieldErrors.email ? "email-error" : undefined}
               maxLength={254}
               required
             />
@@ -92,28 +97,59 @@ export function LoginPage() {
           </div>
           <div className="field">
             <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              aria-invalid={Boolean(fieldErrors.password)}
-              aria-describedby={fieldErrors.password ? 'password-error' : undefined}
-              maxLength={128}
-              required
-            />
+            <div className="password-wrap">
+              <input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                autoComplete="new-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                aria-invalid={Boolean(fieldErrors.password)}
+                aria-describedby={
+                  fieldErrors.password ? "password-error" : undefined
+                }
+                maxLength={128}
+                required
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPassword((shown) => !shown)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                aria-pressed={showPassword}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="20"
+                  height="20"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+                  <circle cx="12" cy="12" r="3" />
+                  {showPassword && <path d="M3 3l18 18" />}
+                </svg>
+              </button>
+            </div>
             {fieldErrors.password && (
               <p id="password-error" className="field-error">
                 {fieldErrors.password}
               </p>
             )}
           </div>
-          <button type="submit" className="button button-block" disabled={submitting}>
-            {submitting ? 'Signing in…' : 'Sign in'}
+          <button
+            type="submit"
+            className="button button-block"
+            disabled={submitting}
+          >
+            {submitting ? "Signing in…" : "Sign in"}
           </button>
         </form>
       </div>
     </main>
-  )
+  );
 }
