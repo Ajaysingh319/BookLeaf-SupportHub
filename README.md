@@ -1,5 +1,5 @@
 # BookLeaf SupportHub
-
+Live Vercel URL: https://book-leaf-support-ghna9d93y-techaj.vercel.app/
 An author support and communication portal for BookLeaf Publishing. Authors sign in, see their books and royalties, and raise support tickets. The operations team triages those tickets in an admin queue, with AI help to classify, prioritise and draft replies. A human always reviews and sends the reply.
 
 - **Author portal:** My Books, New Ticket, My Tickets, Ticket Detail (updates automatically).
