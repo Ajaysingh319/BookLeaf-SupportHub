@@ -57,6 +57,304 @@ Browser (React)  ──HTTPS/JSON──▶  Spring Boot API  ──JDBC──▶
 - **No hardcoded configuration.** See [Configuration](#configuration).
 - **The client holds no copies of server rules.** It reads `GET /api/v1/config` at startup: limits, poll intervals, policy figures, locale/currency, category/priority/status labels and the allowed status transitions.
 
+### Diagrams
+
+The diagrams below are Mermaid, which GitHub renders directly in this README.
+
+#### 1. System and deployment
+
+```mermaid
+flowchart LR
+    subgraph Browser
+        UI["React app<br/>(author and admin routes)"]
+    end
+    subgraph Vercel
+        STATIC["Static build<br/>vercel.json rewrites /api/*"]
+    end
+    subgraph Render["Render (Docker)"]
+        API["Spring Boot API"]
+    end
+    subgraph Neon
+        DB[("PostgreSQL")]
+    end
+    LLM["Gemini API<br/>(OpenAI-compatible)"]
+
+    UI -->|"HTTPS, session cookie"| STATIC
+    STATIC -->|"/api/* forwarded"| API
+    API -->|"JDBC over SSL"| DB
+    API -->|"HTTPS, API key (server only)"| LLM
+```
+
+#### 2. Backend components
+
+```mermaid
+flowchart TB
+    REQ["HTTP request"] --> RID["RequestIdFilter"]
+    RID --> AUTH["AuthFilter<br/>cookie session, CSRF, Origin, role rules"]
+    AUTH --> CTRL
+
+    subgraph CTRL["web (controllers)"]
+        AC["AuthController"]
+        AUC["AuthorController"]
+        ADC["AdminController"]
+        CC["ClientConfigController / HealthController"]
+    end
+
+    subgraph SVC["service"]
+        AS["AuthService"]
+        ATS["AuthorTicketService / AuthorBookService"]
+        ADS["AdminTicketService"]
+        ATT["AttachmentService / FileTypes"]
+    end
+
+    subgraph SEC["security"]
+        SS["SessionService, JwtService, SessionCookies"]
+        LT["LoginThrottle, SessionRevocations"]
+    end
+
+    subgraph AI["ai"]
+        EVT["TriageListener (after commit, async)"]
+        TRI["AiTriageService + FallbackTriage + TriageParser"]
+        DRA["AiDraftService"]
+        PRM["PromptTemplates (prompt and knowledge-base files)"]
+        LLMC["OpenAiLlmClient"]
+        REC["AiEventRecorder"]
+    end
+
+    subgraph REPO["repository (Spring Data JPA)"]
+        R1["User, Book, Ticket, TicketMessage,<br/>Attachment, AiEvent repositories"]
+        QQ["TicketQueueQuery (Criteria API)"]
+    end
+
+    AC --> AS --> SS
+    AS --> LT
+    AUC --> ATS
+    AUC --> ATT
+    ADC --> ADS
+    ADC --> DRA
+    ADC --> ATT
+    ATS --> R1
+    ADS --> R1
+    ADS --> QQ
+    ATT --> R1
+    ATS -.->|"TicketCreatedEvent"| EVT
+    EVT --> TRI
+    TRI --> PRM
+    DRA --> PRM
+    TRI --> LLMC
+    DRA --> LLMC
+    TRI --> REC
+    DRA --> REC
+    REC --> R1
+    R1 --> DB[("PostgreSQL")]
+```
+
+#### 3. Data model
+
+```mermaid
+erDiagram
+    APP_USERS ||--o{ BOOKS : "owns"
+    APP_USERS ||--o{ TICKETS : "raises"
+    APP_USERS ||--o{ TICKETS : "assigned to (admin)"
+    BOOKS ||--o{ TICKETS : "about (optional)"
+    TICKETS ||--o{ TICKET_MESSAGES : "has"
+    APP_USERS ||--o{ TICKET_MESSAGES : "sends"
+    TICKETS ||--o{ ATTACHMENTS : "has"
+    APP_USERS ||--o{ ATTACHMENTS : "uploads"
+    TICKETS ||--o{ AI_EVENTS : "logged by ticket_id"
+    BOOKS ||--o{ BOOK_AVAILABLE_ON : "listed on"
+
+    APP_USERS {
+        uuid id PK
+        string source_author_id
+        string name
+        string email UK
+        string password_hash
+        string role "AUTHOR or ADMIN"
+        string phone
+        string city
+        date joined_date
+    }
+    BOOKS {
+        uuid id PK
+        string source_book_id UK
+        uuid author_id FK
+        string title
+        string isbn
+        string genre
+        date publication_date
+        string status
+        decimal mrp
+        decimal author_royalty_per_copy
+        int total_copies_sold
+        decimal total_royalty_earned
+        decimal royalty_paid
+        decimal royalty_pending
+        date last_royalty_payout_date
+        string print_partner
+    }
+    BOOK_AVAILABLE_ON {
+        uuid book_id FK
+        string platform
+    }
+    TICKETS {
+        uuid id PK
+        uuid author_id FK
+        uuid book_id FK "null = General"
+        string subject
+        string description
+        string status "OPEN, IN_PROGRESS, RESOLVED, CLOSED"
+        string category "working value"
+        string priority "working value"
+        string ai_category "AI suggestion"
+        string ai_priority "AI suggestion"
+        string ai_outcome "PENDING, SUCCESS, FALLBACK"
+        string ai_reason
+        boolean triage_overridden
+        uuid assigned_admin_id FK
+        timestamp created_at
+        timestamp updated_at
+        timestamp resolved_at
+        timestamp replied_at
+        timestamp last_author_message_at
+    }
+    TICKET_MESSAGES {
+        uuid id PK
+        uuid ticket_id FK
+        uuid sender_id FK
+        string body
+        string visibility "PUBLIC or INTERNAL"
+        timestamp created_at
+    }
+    ATTACHMENTS {
+        uuid id PK
+        uuid ticket_id FK
+        uuid uploaded_by FK
+        string file_name
+        string content_type "detected from bytes"
+        long size_bytes
+        bytea content
+        timestamp created_at
+    }
+    AI_EVENTS {
+        uuid id PK
+        uuid ticket_id
+        string task_type "TRIAGE or DRAFT"
+        string provider
+        string model
+        string outcome
+        string failure_reason
+        long latency_ms
+        int input_tokens
+        int output_tokens
+        timestamp created_at
+    }
+```
+
+#### 4. Sign-in and a protected write
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant C as React app
+    participant F as AuthFilter
+    participant A as AuthController / AuthService
+    participant D as PostgreSQL
+
+    U->>C: email and password
+    C->>A: POST /auth/login
+    A->>A: LoginThrottle check (per address and email)
+    A->>D: find user by email, BCrypt compare
+    alt valid
+        A-->>C: 200 {user, csrfToken} + Set-Cookie (HttpOnly session)
+        Note over C: csrfToken kept in memory only
+    else invalid or locked
+        A-->>C: 401 INVALID_CREDENTIALS or 429 TOO_MANY_ATTEMPTS
+    end
+
+    C->>F: POST /author/tickets (cookie + X-CSRF-Token)
+    F->>F: validate session, role, CSRF token, Origin
+    alt checks pass
+        F->>A: request continues to the controller
+    else CSRF or Origin mismatch
+        F-->>C: 403 CSRF_INVALID
+    end
+```
+
+#### 5. New ticket and AI triage
+
+```mermaid
+sequenceDiagram
+    actor Au as Author
+    participant API as AuthorController / AuthorTicketService
+    participant DB as PostgreSQL
+    participant L as TriageListener (async)
+    participant T as AiTriageService
+    participant G as Gemini API
+    actor Ad as Admin
+
+    Au->>API: POST /author/tickets
+    API->>DB: validate book ownership, save ticket (OPEN, safe defaults)
+    API-->>Au: 201 ticket (AI not needed to succeed)
+    API--)L: TicketCreatedEvent (after commit)
+    L->>T: triage(ticket)
+    T->>G: small JSON-only prompt
+    alt valid JSON, allowed values
+        G-->>T: category, priority, reason
+        T->>DB: store ai_* fields (and working values unless admin overrode)
+        T->>DB: ai_events row (SUCCESS, tokens, latency)
+    else down, rate-limited, timeout or bad output
+        T->>T: FallbackTriage (rules)
+        T->>DB: store fallback values, ai_outcome FALLBACK
+        T->>DB: ai_events row (failure reason)
+    end
+    Ad->>API: GET /admin/tickets (sees category, priority, manual-review flag)
+```
+
+#### 6. AI draft and reply
+
+```mermaid
+sequenceDiagram
+    actor Ad as Admin
+    participant API as AdminController
+    participant DR as AiDraftService
+    participant DB as PostgreSQL
+    participant G as Gemini API
+    actor Au as Author
+
+    Ad->>API: POST /admin/tickets/{id}/ai-draft
+    API->>DR: generate(ticketId)
+    DR->>DB: ticket, one book record, last 3 public replies
+    DR->>G: prompt = instruction + knowledge base + patterns + ticket context
+    alt success
+        G-->>DR: draft text
+        DR-->>Ad: {draft} (nothing saved or sent)
+    else AI unavailable
+        DR-->>Ad: 503 AI_UNAVAILABLE (write the reply manually)
+    end
+    Ad->>Ad: edit the draft
+    Ad->>API: POST /admin/tickets/{id}/replies {body, status?}
+    API->>DB: save PUBLIC message, update status and repliedAt
+    Au->>API: GET /author/tickets/{id} (polled every few seconds)
+    API-->>Au: public replies only, no notes or AI fields
+```
+
+#### 7. Ticket status lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> OPEN: ticket created
+    OPEN --> IN_PROGRESS
+    OPEN --> RESOLVED
+    OPEN --> CLOSED
+    IN_PROGRESS --> OPEN
+    IN_PROGRESS --> RESOLVED
+    IN_PROGRESS --> CLOSED
+    RESOLVED --> OPEN: admin reopens, or author replies
+    RESOLVED --> CLOSED
+    CLOSED --> OPEN: admin reopens only
+```
+
 ### Ticket lifecycle (TDD section 8)
 
 | From | May move to |
