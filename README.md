@@ -1,22 +1,24 @@
 # BookLeaf SupportHub
-Live Vercel URL: https://book-leaf-support-ghna9d93y-techaj.vercel.app/
 An author support and communication portal for BookLeaf Publishing. Authors sign in, see their books and royalties, and raise support tickets. The operations team triages those tickets in an admin queue, with AI help to classify, prioritise and draft replies. A human always reviews and sends the reply.
 
 - **Author portal:** My Books, New Ticket, My Tickets, Ticket Detail (updates automatically).
 - **Admin portal:** ticket queue with filters, ticket detail, category/priority overrides, assignment, internal notes, AI-drafted replies.
 - **AI:** classification, priority score and reply drafting from the BookLeaf knowledge base, with a rule-based fallback so the system works when the AI is down.
 
-> **Status:** all functionality is built and tested locally, and the AI has been verified against the real Gemini API. Not yet done: the live deployment and the production `.env` (see [Known limitations](#known-limitations-and-next-steps)).
+> **Status:** all functionality is built, tested, and deployed (client on Vercel, API on Render, database on Neon). The AI has been verified against the real Gemini API. See [Deployment](#deployment) and [Known limitations](#known-limitations-and-next-steps).
 
 ## Live demo and credentials
 
 | | |
 |---|---|
-| Live URL | _to be added after deployment_ |
+| Live URL | https://book-leaf-support-ghna9d93y-techaj.vercel.app/ (the client; the API is reached through it at `/api`) |
+| API health | https://bookleaf-supporthub.onrender.com/api/v1/health |
 | Admin login | email = the `SEED_ADMIN_EMAIL` value used when seeding; password = `SEED_ADMIN_PASSWORD` |
 | Author logins | the 10 author emails in `backend/src/main/resources/seed/bookleaf_sample_data.json` (for example `priya.sharma@email.com`); password = `SEED_AUTHOR_PASSWORD` |
 
 The sample data has no passwords, so demo passwords are chosen at seed time from environment variables and stored only as BCrypt hashes. Rotate them after evaluation.
+
+> **Note on the first request:** the API runs on a free instance that sleeps when idle, so the first request after a pause can take up to a minute. Open the live URL once before a demo.
 
 ## Tech stack and why
 
@@ -27,6 +29,7 @@ The sample data has no passwords, so demo passwords are chosen at seed time from
 | Database | PostgreSQL | Relational integrity for authors, books, tickets and messages; `NUMERIC` for money. |
 | Auth | BCrypt password hashes; a signed session token in an HttpOnly cookie, CSRF token on writes, sign-in throttling; all checked in one filter | The token is invisible to page scripts, expires when idle, can be revoked at sign-out, and cross-site requests cannot ride on it. |
 | Real-time | Short polling (5 s on a ticket, 10 s on lists) | Meets "near real-time" without WebSocket infrastructure (TDD section 9). |
+| Hosting | Vercel (client), Render (API in a Docker container), Neon (PostgreSQL) | All three have free tiers. The client proxies `/api` to the API so the session cookie is first-party. |
 | AI | Any OpenAI-compatible chat API (Gemini planned) | Provider, model and URL are configuration, not code. See [AI integration](#ai-integration). |
 
 ## Architecture
@@ -157,6 +160,43 @@ Other tunables live in `application.properties`: the absolute session limit and 
 
 The API key is never sent to the browser. `.env` files are git-ignored; only `.env.example` files are committed.
 
+## Deployment
+
+```
+Browser ──▶ Vercel (React build)
+              │  /api/*  rewritten (vercel.json)
+              ▼
+           Render (Spring Boot in Docker)  ──JDBC/SSL──▶  Neon (PostgreSQL)
+                          │
+                          └──▶ Gemini API (key only on Render)
+```
+
+**Why a proxy:** the login is an HttpOnly cookie, which only works when the page and the API are on the same site. The browser only ever talks to the Vercel address; `client/vercel.json` forwards `/api/*` to Render and sends every other path to `index.html` so page refreshes work. `VITE_API_BASE_URL` stays empty in production.
+
+**1. Database (Neon).** Create a project and note the host, database, user and password. The backend's `DB_URL` is the JDBC form: `jdbc:postgresql://<host>/<database>?sslmode=require`. Flyway creates the schema on first start.
+
+**2. API (Render).** New Web Service from this repository, language **Docker**, Dockerfile path `backend/Dockerfile`, root directory left empty (the Dockerfile copies `backend/` itself). Render supplies `PORT`. Set these environment variables (secrets as secret values):
+
+| Variable | Value |
+|---|---|
+| `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` | The Neon connection details |
+| `JPA_DDL_AUTO` | `validate` |
+| `AUTH_SECRET` | A new random string of at least 32 characters |
+| `TOKEN_TTL_MINUTES` | `60` |
+| `COOKIE_SECURE`, `COOKIE_SAMESITE` | `true`, `Lax` |
+| `CLIENT_ORIGIN` | The exact Vercel address people use, with no trailing slash |
+| `LLM_API_KEY`, `LLM_PROVIDER_NAME`, `LLM_MODEL`, `LLM_REASONING_EFFORT`, `LLM_BASE_URL` | As in [Configuration](#configuration) |
+| `APP_BRAND_NAME`, `APP_CURRENCY_CODE`, `APP_LOCALE` | Display settings |
+| `SEED_ENABLED`, `SEED_ADMIN_EMAIL`, `SEED_ADMIN_NAME`, `SEED_ADMIN_PASSWORD`, `SEED_AUTHOR_PASSWORD` | See below |
+
+**3. Seed the sample data.** Set `SEED_ENABLED=true` for the first start. The import is idempotent (it adds by source id and never duplicates), creates the 10 authors, 18 books and the admin, and hashes the passwords. Passwords are only set when an account is first created, so changing `SEED_*_PASSWORD` later does not change existing accounts. Set `SEED_ENABLED=false` afterwards.
+
+**4. Client (Vercel).** Import the repository, root directory `client`, preset Vite, no environment variables. Then set `CLIENT_ORIGIN` on Render to the Vercel address and redeploy the API: the backend rejects writes whose `Origin` differs from it.
+
+**5. Check.** `/api/v1/health` returns `{"status":"UP"}`; `/api/v1/config` returns the brand and options; sign in as both roles on the Vercel address.
+
+Free-tier notes: Render sleeps idle instances (first request is slow) and Neon pauses an idle database (a second of delay). Gemini's free tier allows only about 20 requests a day per model; enable billing for an evaluation. Sessions and the sign-in throttle are held in memory, so they reset when the API restarts.
+
 ## AI integration
 
 **Tasks** (TDD section 7):
@@ -279,7 +319,7 @@ docs/WRITEUP.md        one-page write-up
 
 ## Known limitations and next steps
 
-- **Not yet done:** live deployment and URL; production `.env`. The AI was exercised live on the brief's sample queries (see above), but classification accuracy has only been measured on 5 live samples and draft quality reviewed by reading about 13 drafts; a larger labelled set is the next step.
+- **Deployment:** runs on free tiers (see [Deployment](#deployment)): the API sleeps when idle, there is one instance, and no backups or monitoring beyond the host's defaults. The AI was exercised live on the brief's sample queries (see above), but classification accuracy has only been measured on 5 live samples and draft quality reviewed by reading about 13 drafts; a larger labelled set is the next step.
 - **Sessions:** revocations and the sign-in throttle are in memory (they reset on restart and are not shared between instances); a multi-instance deployment needs a shared store such as Redis or a database table. The client address used for throttling is the connection's address, so behind a proxy the proxy's forwarded-address handling must be configured. There is no refresh-token rotation, MFA, or password reset flow.
 - **Real time:** polling, not SSE/WebSockets.
 - **Tickets:** there is no assignment history or audit log of admin actions. Resolved and closed tickets sort oldest-first like the rest.
